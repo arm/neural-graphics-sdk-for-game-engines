@@ -1,0 +1,63 @@
+// Copyright  © 2023 Advanced Micro Devices, Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: MIT
+
+#ifndef FFX_NSS_RESOURCES_H
+#define FFX_NSS_RESOURCES_H
+
+#if defined(FFX_CPU) || defined(FFX_GPU)
+#define FFX_NSS_RESOURCE_IDENTIFIER_NULL                    0
+#define FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR             1
+#define FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH             2
+#define FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1         3
+#define FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS    4
+#define FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV              5
+#define FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR  6
+#define FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR         7
+#define FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_TM1 8
+#define FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD     9
+#define FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR 10
+#define FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT         11
+
+#define FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR 12
+#define FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR 13
+#define FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR 14
+#define FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR 15
+#define FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR 16
+
+#define FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1     17
+#define FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2     18
+#define FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1          19
+#define FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2          20
+#define FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1 21
+#define FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2 22
+
+#define FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS 23
+
+#define FFX_NSS_RESOURCE_IDENTIFIER_COUNT 24
+
+#define FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS 0
+#define FFX_NSS_CONSTANTBUFFER_COUNT          1
+
+#endif  // #if defined(FFX_CPU) || defined(FFX_GPU)
+
+#endif  //!defined( FFX_NSS_RESOURCES_H )

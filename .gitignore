@@ -1,0 +1,16 @@
+.vscode/
+.idea/
+*.sln
+*.code-workspace
+
+/bin
+/build
+/build_*
+sdk/tools/ffx_shader_compiler/bin/
+sdk/tools/ffx_shader_compiler/build/
+sdk/tools/ffx_model_parser/bin/
+sdk/tools/ffx_model_parser/build/
+
+/gen_docs
+
+*.log

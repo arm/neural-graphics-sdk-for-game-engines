@@ -1,0 +1,20 @@
+Third-Party Binary Components
+=============================
+
+1. FidelityFX_SC.exe
+   - Description: FidelityFX SDK Shader Compiler tool
+   - Source: https://github.com/GPUOpen-Effects/FidelityFX-FSR
+   - License: MIT
+   - Copyright (c) 2021 Advanced Micro Devices, Inc.
+
+2. glslangValidator.exe
+   - Description: Khronos-reference front end for GLSL/ESSL, partial front end for HLSL, and a SPIR-V generator
+   - Source: https://github.com/KhronosGroup/glslang
+   - License: Apache License 2.0
+   - Copyright (c) 2014-2016 The Khronos Group Inc.
+
+3. Model_Parser.exe
+   - Description: A model parser developed based on vgf library by Arm
+   - Source: https://github.com/arm/ai-ml-sdk-vgf-library
+   - License: Apache License 2.0
+   - Copyright (c) 2025 Arm Limited.

@@ -1,0 +1,4 @@
+[submodule "sdk/tools/ffx_shader_compiler/libs/SPIRV-Cross"]
+	path = sdk/tools/ffx_shader_compiler/libs/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross
+	branch = main

@@ -1,0 +1,93 @@
+# This file is part of the FidelityFX SDK.
+#
+# Copyright (C) 2024 Advanced Micro Devices, Inc.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files(the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions :
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: MIT
+
+message(STATUS "Configure CMakeCompileNSSShaders.txt")
+message(STATUS "FFX_GLSLANG_EXE_PATH=${FFX_GLSLANG_EXE_PATH}")
+
+set(NSS_BASE_ARGS
+    -glslangexe=${FFX_GLSLANG_EXE_PATH}
+    -DOUTPUT_IMG_FORMAT=r11f_g11f_b10f
+    -DFFX_8_BIT_TYPES=1
+    -reflection -deps=gcc -DFFX_GPU=1
+    -DQUANTIZED=1
+    )
+
+if(WIN32)
+    set(NSS_PERMUTATION_ARGS
+        -DREVERSE_Z={0,1}
+        -DRESAMPLE_BICUBIC={0,1}
+        -DALIAS_OUTPUT_TENSORS_AS_IMAGES={0,1}
+        -DSCALE_PRESET_MODE={0,1,2,3})
+
+else()
+    # need to add quotes around the values to avoid the linux shell
+    # expand the args automatically
+    set(NSS_PERMUTATION_ARGS
+        -DREVERSE_Z="{0,1}"
+        -DRESAMPLE_BICUBIC="{0,1}"
+        -DALIAS_OUTPUT_TENSORS_AS_IMAGES="{0,1}"
+        -DSCALE_PRESET_MODE="{0,1,2,3}"
+        )
+endif()
+
+set(NSS_INCLUDE_ARGS
+    "${FFX_GPU_PATH}"
+    "${FFX_GPU_PATH}/nss")
+
+if (NOT NSS_SHADER_EXT)
+    set(NSS_SHADER_EXT *)
+endif()
+
+file(GLOB NSS_SHADERS
+    "shaders/nss/*.${NSS_SHADER_EXT}")
+
+# compile all the shaders	
+compile_shaders_with_depfile(
+    "${FFX_SC_EXECUTABLE}"
+    "${NSS_BASE_ARGS}" "${NSS_API_BASE_ARGS}" "${NSS_PERMUTATION_ARGS}" "${NSS_INCLUDE_ARGS}"
+    "${NSS_SHADERS}" "${FFX_PASS_SHADER_OUTPUT_PATH}" NSS_PERMUTATION_OUTPUTS)
+
+# add the header files they generate to the main list of dependencies
+add_shader_output("${NSS_PERMUTATION_OUTPUTS}")
+
+# data graph models
+
+# for now, assume files will be in vgf format (but extension might be slightly different )
+if (NOT NSS_DATA_GRAPH_EXT)
+    set(NSS_DATA_GRAPH_EXT *)
+endif()
+
+
+file(GLOB NSS_DATA_GRAPHS
+    "data_graphs/nss/*.${NSS_DATA_GRAPH_EXT}")
+
+compile_data_graphs(
+    "${VGF_PARSER_EXECUTABLE}"
+    "${FFX_PASS_DATA_GRAPH_OUTPUT_PATH}/"
+    "${NSS_DATA_GRAPHS}" 
+    NSS_DATA_GRAPH_OUTPUTS)
+
+# add the header files they generate to the main list of dependencies
+add_shader_output("${NSS_DATA_GRAPH_OUTPUTS}")
