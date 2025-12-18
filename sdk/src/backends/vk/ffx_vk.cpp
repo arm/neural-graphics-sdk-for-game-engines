@@ -6808,9 +6808,27 @@ static FfxErrorCode executeGpuJobCopy(BackendContext_VK* backendContext, FfxGpuJ
 
             VkExtent3D extent = {};
 
-            extent.width  = ffxResourceSrc.resourceDescription.width / (mip + 1);
-            extent.height = ffxResourceSrc.resourceDescription.height / (mip + 1);
-            extent.depth  = ffxResourceSrc.resourceDescription.depth / (mip + 1);
+            switch (job->copyJobDescriptor.copyMode)
+            {
+            case FFX_GPU_COPY_SRC_EXTENT:
+                extent.width  = ffxResourceSrc.resourceDescription.width / (mip + 1);
+                extent.height = ffxResourceSrc.resourceDescription.height / (mip + 1);
+                extent.depth  = ffxResourceSrc.resourceDescription.depth / (mip + 1);
+                break;
+            case FFX_GPU_COPY_DST_EXTENT:
+                extent.width  = ffxResourceDst.resourceDescription.width / (mip + 1);
+                extent.height = ffxResourceDst.resourceDescription.height / (mip + 1);
+                extent.depth  = ffxResourceDst.resourceDescription.depth / (mip + 1);
+                break;
+            case FFX_GPU_COPY_MIN_EXTENT:
+                extent.width  = FFX_MINIMUM(ffxResourceSrc.resourceDescription.width, ffxResourceDst.resourceDescription.width) / (mip + 1);
+                extent.height = FFX_MINIMUM(ffxResourceSrc.resourceDescription.height, ffxResourceDst.resourceDescription.height) / (mip + 1);
+                extent.depth  = FFX_MINIMUM(ffxResourceSrc.resourceDescription.depth, ffxResourceDst.resourceDescription.depth) / (mip + 1);
+                break;
+            default:
+                FFX_ASSERT_MESSAGE(false, "Unsupported copy mode in vulkan backend of FFX SDK.");
+                break;
+            }
 
             VkImageCopy& copyRegion = imageCopies[mip];
 

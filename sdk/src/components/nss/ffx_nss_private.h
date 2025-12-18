@@ -104,7 +104,7 @@ typedef struct NssConstants
     FfxFloat32x2 _InvOutputDims;      ///< Inverse upscaled image dimensions (width, height)
     FfxFloat32x2 _InvInputDims;       ///< Inverse rendered image dimensions (width, height)
     FfxFloat32x2 _MotionVectorScale;  ///< .x = motion vector scale.x, .y = motion vector scale.y
-    FfxFloat32x2 _Padding0;           ///< Padding to 16 byte boundary for std140 layout
+    FfxUInt32x2  _UnpaddedInputDims;  ///< Unpadded rendered image dimensions (width, height)
 
     union
     {
@@ -127,6 +127,7 @@ typedef struct FfxNssContext_Private
     NssConstants             constants;  ///< The constants used for the current dispatch. Setup and stored in host side.
     FfxDevice                device;
     FfxDeviceCapabilities    deviceCapabilities;
+    FfxPipelineState         pipelineNssMirrorPadding;                         ///< The pipeline state for the NSS mirror padding pass.
     FfxPipelineState         pipelineNssPreprocess;                            ///< The pipeline state for the NSS preprocess pass.
     FfxPipelineState         pipelineNssDataGraph;                             ///< The pipeline state for the NSS data graph pass.
     FfxPipelineState         pipelineNssPostprocess;                           ///< The pipeline state for the NSS postprocess pass.
@@ -138,4 +139,9 @@ typedef struct FfxNssContext_Private
 
     bool     firstExecution;
     uint32_t resourceFrameIndex;
+    bool     hasPaddingPass;
+    uint32_t paddedInputWidth;
+    uint32_t paddedInputHeight;
+    uint32_t paddedOutputWidth;
+    uint32_t paddedOutputHeight;
 } FfxNssContext_Private;

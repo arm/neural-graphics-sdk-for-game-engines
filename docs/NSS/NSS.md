@@ -98,6 +98,7 @@ qualityMode: Select shader quality mode. This bit is currently unused. It will b
 | FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC | Sample using Bicubic filtering. |
 | FFX_API_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES | Tensor image aliasing is enabled. Will load tensors through "texture" functions. |
 | FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT | Runtime should allow 16bit resources to be used. |
+| FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING | The sdk itself will not do the padding, the user should do the padding instead. |
 | FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING | 	Runtime should check some API values and report issues. |
 
 #### ffxDestroyContext

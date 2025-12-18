@@ -95,8 +95,10 @@ if(FFX_VS_VERSION STREQUAL 2015 OR FFX_VS_VERSION STREQUAL 2017)
 endif()
 
 # Setup common variables
-if(WIN32)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
 	set(FFX_SC_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/FidelityFX_SC.exe)
+	# we need to use the glslangValidator that supports the VulkanML
+	set(FFX_GLSLANG_EXE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/glslangValidator.exe)
 	set(VGF_PARSER_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/Model_Parser.exe)
 else()
 	set(FFX_SC_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/FidelityFX_SC)

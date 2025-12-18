@@ -1,12 +1,7 @@
-// -----------------------------------------------------------------------------
-// The proprietary software and information contained in this file is
-// confidential and may only be used by an authorized person under a valid
-// licensing agreement from Arm Limited or its affiliates.
-// Copyright (C) 2024-2025. Arm Limited or its affiliates. All rights reserved.
-// This entire notice must be reproduced on all copies of this file and
-// copies of this file may only be made by an authorized person under a valid
-// licensing agreement from Arm Limited or its affiliates.
-// -----------------------------------------------------------------------------
+/*
+ * SPDX-FileCopyrightText: Copyright 2023-2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef ML_SDK_VGF_LIB_DECODER_API_H
 #define ML_SDK_VGF_LIB_DECODER_API_H
@@ -22,7 +17,7 @@ extern "C" {
 #    define MLSDK_EXPORT __attribute__((visibility("default")))
 #    define MLSDK_IMPORT
 #else
-#    ifdef _MSC_VER // Visual Studio
+#    ifdef _MSC_VER
 #        define MLSDK_EXPORT __declspec(dllexport)
 #        define MLSDK_IMPORT __declspec(dllimport)
 #    else
@@ -133,12 +128,12 @@ typedef struct {
  *
  */
 typedef struct {
-    uint64_t offset; //< offset from the beginning of file the start of the section.
-    uint64_t size;   //< size (in bytes) of the section.
+    uint64_t offset; ///< offset from the beginning of file the start of the section.
+    uint64_t size;   ///< size (in bytes) of the section.
 } mlsdk_decoder_vgf_section_info;
 
 /**
- * @brief The spirv code view
+ * @brief The SPIR-V code view
  */
 typedef struct {
     const uint32_t *code;
@@ -245,7 +240,7 @@ MLSDKAPI void mlsdk_decoder_get_header_version(const mlsdk_decoder_header_decode
  *
  * @param decoder The header decoder associated to the header data
  * @param sectionName Section name
- * @param section The pointer to the vgf section info
+ * @param section The pointer to the VGF section info
  *
  */
 MLSDKAPI void mlsdk_decoder_get_header_section_info(const mlsdk_decoder_header_decoder *const decoder,
@@ -257,6 +252,15 @@ MLSDKAPI void mlsdk_decoder_get_header_section_info(const mlsdk_decoder_header_d
  * @return The size in bytes of the memory needed to create the module table decoder
  */
 MLSDKAPI size_t mlsdk_decoder_module_table_decoder_mem_reqs();
+
+/**
+ * @brief Checks if pointer points to valid module table data
+ *
+ * @param moduleTableData The pointer to the data
+ * @param size The size in bytes of the data
+ * @return True if the data is a valid section, false otherwise
+ */
+MLSDKAPI bool mlsdk_decoder_is_valid_module_table(const void *moduleTableData, uint64_t size);
 
 /**
  * @brief Creates the module table decoder
@@ -284,7 +288,7 @@ MLSDKAPI size_t mlsdk_decoder_get_module_table_num_entries(const mlsdk_decoder_m
  * @return The module type of the entry
  */
 MLSDKAPI mlsdk_decoder_module_type
-mlsdk_decoder_get_module_type(const mlsdk_decoder_module_table_decoder *const decoder, int idx);
+mlsdk_decoder_get_module_type(const mlsdk_decoder_module_table_decoder *const decoder, uint32_t idx);
 
 /**
  * @brief Returns the module name of the idx-entry
@@ -293,7 +297,8 @@ mlsdk_decoder_get_module_type(const mlsdk_decoder_module_table_decoder *const de
  * @param idx The index for the entry in the module table
  * @return Char pointer to the module name
  */
-MLSDKAPI const char *mlsdk_decoder_get_module_name(const mlsdk_decoder_module_table_decoder *const decoder, int idx);
+MLSDKAPI const char *mlsdk_decoder_get_module_name(const mlsdk_decoder_module_table_decoder *const decoder,
+                                                   uint32_t idx);
 
 /**
  * @brief Returns the SPIR-V entry_point name stored in the module
@@ -305,18 +310,18 @@ MLSDKAPI const char *mlsdk_decoder_get_module_name(const mlsdk_decoder_module_ta
  * If no entry_point is stored in the module a null pointer is returned.
  */
 MLSDKAPI const char *mlsdk_decoder_get_module_entry_point(const mlsdk_decoder_module_table_decoder *const decoder,
-                                                          int idx);
+                                                          uint32_t idx);
 
 /**
  * @brief Gets the SPIR-V code stored in the module
  *
  * @param decoder The pointer to the module table decoder
  * @param idx The index for the entry in the module table
- * @param spirvCode The place where to store the spirv code
+ * @param spirvCode The place where to store the SPIR-V code
  *
- * If no code is stored in the module the spirv code pointer will be set to null and the words to zero.
+ * If no code is stored in the module the SPIR-V code pointer will be set to null and the words to zero.
  */
-MLSDKAPI void mlsdk_decoder_get_module_code(const mlsdk_decoder_module_table_decoder *const decoder, int idx,
+MLSDKAPI void mlsdk_decoder_get_module_code(const mlsdk_decoder_module_table_decoder *const decoder, uint32_t idx,
                                             mlsdk_decoder_spirv_code *spirvCode);
 
 /**********************************************************************************************************************/
@@ -347,7 +352,7 @@ MLSDKAPI size_t mlsdk_decoder_binding_slot_size(const mlsdk_decoder_model_sequen
  */
 MLSDKAPI uint32_t
 mlsdk_decoder_binding_slot_binding_id(const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-                                      mlsdk_decoder_binding_slots_handle handle, int slotIdx);
+                                      mlsdk_decoder_binding_slots_handle handle, uint32_t slotIdx);
 
 /**
  * @brief Returns the mrt index of a given binding slot
@@ -359,7 +364,7 @@ mlsdk_decoder_binding_slot_binding_id(const mlsdk_decoder_model_sequence_decoder
  */
 MLSDKAPI uint32_t
 mlsdk_decoder_binding_slot_mrt_index(const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-                                     mlsdk_decoder_binding_slots_handle handle, int slotIdx);
+                                     mlsdk_decoder_binding_slots_handle handle, uint32_t slotIdx);
 
 /**********************************************************************************************************************/
 
@@ -390,7 +395,7 @@ mlsdk_decoder_get_push_constant_ranges_size(const mlsdk_decoder_model_sequence_d
  */
 MLSDKAPI uint32_t mlsdk_decoder_get_push_constant_range_stage_flags(
     const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-    mlsdk_decoder_push_constant_ranges_handle handle, int rangeIdx);
+    mlsdk_decoder_push_constant_ranges_handle handle, uint32_t rangeIdx);
 
 /**
  * @brief Returns the offset of a given push constant range
@@ -402,7 +407,7 @@ MLSDKAPI uint32_t mlsdk_decoder_get_push_constant_range_stage_flags(
  */
 MLSDKAPI uint32_t
 mlsdk_decoder_get_push_constant_range_offset(const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-                                             mlsdk_decoder_push_constant_ranges_handle handle, int rangeIdx);
+                                             mlsdk_decoder_push_constant_ranges_handle handle, uint32_t rangeIdx);
 
 /**
  * @brief Returns the number of push constants in a given push constant range
@@ -414,9 +419,18 @@ mlsdk_decoder_get_push_constant_range_offset(const mlsdk_decoder_model_sequence_
  */
 MLSDKAPI uint32_t
 mlsdk_decoder_get_push_constant_range_size(const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-                                           mlsdk_decoder_push_constant_ranges_handle handle, int rangeIdx);
+                                           mlsdk_decoder_push_constant_ranges_handle handle, uint32_t rangeIdx);
 
 /**********************************************************************************************************************/
+
+/**
+ * @brief Checks if pointer points to valid model sequence data
+ *
+ * @param modelSequenceData The pointer to the data
+ * @param size The size in bytes of the data
+ * @return True if the data is a valid section, false otherwise
+ */
+MLSDKAPI bool mlsdk_decoder_is_valid_model_sequence(const void *modelSequenceData, uint64_t size);
 
 /**
  * @brief Create the model sequence decoder
@@ -452,7 +466,7 @@ mlsdk_decoder_get_model_sequence_table_size(const mlsdk_decoder_model_sequence_d
  * @return Number of descriptorset infos in segment with index segIdx
  */
 MLSDKAPI size_t mlsdk_decoder_model_sequence_get_segment_descriptorset_info_size(
-    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Gets the constant indexes for the given segment into the constant section
@@ -462,7 +476,7 @@ MLSDKAPI size_t mlsdk_decoder_model_sequence_get_segment_descriptorset_info_size
  * @param constant Constant struct pointer where to store the data
  */
 MLSDKAPI void mlsdk_decoder_model_sequence_get_segment_constant_indexes(
-    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx,
+    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx,
     mlsdk_decoder_constant_indexes *constant);
 
 /**
@@ -473,7 +487,7 @@ MLSDKAPI void mlsdk_decoder_model_sequence_get_segment_constant_indexes(
  * @return Type of segment with index segIdx
  */
 MLSDKAPI mlsdk_decoder_module_type mlsdk_decoder_model_sequence_get_segment_type(
-    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Returns the name of given segment of model sequence
@@ -484,7 +498,7 @@ MLSDKAPI mlsdk_decoder_module_type mlsdk_decoder_model_sequence_get_segment_type
  */
 MLSDKAPI const char *
 mlsdk_decoder_model_sequence_get_segment_name(const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder,
-                                              int segIdx);
+                                              uint32_t segIdx);
 
 /**
  * @brief Returns the module index into the ModuleTable to access the associated Segment's Module
@@ -494,7 +508,7 @@ mlsdk_decoder_model_sequence_get_segment_name(const mlsdk_decoder_model_sequence
  * @return The module index into the ModuleTable of the assocated Segment's Module
  */
 MLSDKAPI uint32_t mlsdk_decoder_model_sequence_get_segment_module_index(
-    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    const mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Gets the dispatch shape of given segment of model sequence
@@ -504,7 +518,7 @@ MLSDKAPI uint32_t mlsdk_decoder_model_sequence_get_segment_module_index(
  * @param dispatchShape Pointer to a dispatch shape struct where to save the data
  */
 MLSDKAPI void mlsdk_decoder_model_sequence_get_segment_dispatch_shape(
-    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx,
+    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx,
     mlsdk_decoder_dispatch_shape *dispatchShape);
 
 /**
@@ -515,7 +529,7 @@ MLSDKAPI void mlsdk_decoder_model_sequence_get_segment_dispatch_shape(
  * @return Handle to the push constant ranges
  */
 MLSDKAPI mlsdk_decoder_push_constant_ranges_handle mlsdk_decoder_model_sequence_get_segment_push_constant_range(
-    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Gets the binding slot of a given descriptor of a given segment of model sequence
@@ -527,7 +541,7 @@ MLSDKAPI mlsdk_decoder_push_constant_ranges_handle mlsdk_decoder_model_sequence_
  * descInd in the segment with index segIdx
  */
 MLSDKAPI mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_segment_descriptor_binding_slot(
-    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx, int descIdx);
+    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx, uint32_t descIdx);
 
 /**
  * @brief Gets the input binding slot of a given segment of model sequence
@@ -537,7 +551,7 @@ MLSDKAPI mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_seg
  * @return Handle to the binding slots array
  * */
 MLSDKAPI mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_segment_input_binding_slot(
-    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Gets the output binding slot of a given segment of model sequence
@@ -548,7 +562,7 @@ MLSDKAPI mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_seg
  */
 MLSDKAPI
 mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_segment_output_binding_slot(
-    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, int segIdx);
+    mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder, uint32_t segIdx);
 
 /**
  * @brief Gets the input binding slot of model sequence
@@ -556,6 +570,7 @@ mlsdk_decoder_binding_slots_handle mlsdk_decoder_model_sequence_get_segment_outp
  * @param modelSequenceDecoder The pointer to the model sequence decoder
  * @return Handle to the binding slots array
  */
+
 MLSDKAPI mlsdk_decoder_binding_slots_handle
 mlsdk_decoder_model_sequence_get_input_binding_slot(mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder);
 /**
@@ -564,6 +579,7 @@ mlsdk_decoder_model_sequence_get_input_binding_slot(mlsdk_decoder_model_sequence
  * @param modelSequenceDecoder The pointer to the model sequence decoder
  * @return Handle to the binding slots array
  */
+
 MLSDKAPI mlsdk_decoder_binding_slots_handle
 mlsdk_decoder_model_sequence_get_output_binding_slot(mlsdk_decoder_model_sequence_decoder *const modelSequenceDecoder);
 /**
@@ -571,6 +587,15 @@ mlsdk_decoder_model_sequence_get_output_binding_slot(mlsdk_decoder_model_sequenc
  * @return The size in bytes of the memory needed to create the model resource table decoder
  */
 MLSDKAPI size_t mlsdk_decoder_model_resource_table_decoder_mem_reqs();
+
+/**
+ * @brief Checks if pointer points to valid model resource table data
+ *
+ * @param modelResourceTableData The pointer to the data
+ * @param size The size in bytes of the data
+ * @return True if the data is a valid section, false otherwise
+ */
+MLSDKAPI bool mlsdk_decoder_is_valid_model_resource_table(const void *modelResourceTableData, uint64_t size);
 
 /**
  * @brief Create the model resource table decoder
@@ -594,14 +619,13 @@ MLSDKAPI size_t mlsdk_decoder_get_model_resource_table_num_entries(
 /**
  * @brief Returns the vk_descriptor_type of the idx-entry in the model resource table
  * or mlsdk_vk_descriptor_type_none for types with no corresponding descriptor type
- * such as graph constants.
  *
  * @param modelResourceTableDecoder The pointer to the model resource table decoder
  * @param idx The index for the entry in the model resource table
  * @return The model resource vk_descriptor_type of the entry
  */
 MLSDKAPI mlsdk_vk_descriptor_type_optional mlsdk_decoder_get_vk_descriptor_type(
-    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, int idx);
+    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, uint32_t idx);
 
 /**
  * @brief Returns the vk_format of the idx-entry in the model resource table
@@ -610,8 +634,8 @@ MLSDKAPI mlsdk_vk_descriptor_type_optional mlsdk_decoder_get_vk_descriptor_type(
  * @param idx The index for the entry in the model resource table
  * @return The model resource vk_format of the entry
  */
-MLSDKAPI mlsdk_vk_format
-mlsdk_decoder_get_vk_format(const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, int idx);
+MLSDKAPI mlsdk_vk_format mlsdk_decoder_get_vk_format(
+    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, uint32_t idx);
 
 /**
  * @brief Returns the category of the idx-entry in the model resource table
@@ -621,7 +645,7 @@ mlsdk_decoder_get_vk_format(const mlsdk_decoder_model_resource_table_decoder *co
  * @return The category of the entry
  */
 MLSDKAPI mlsdk_decoder_mrt_category mlsdk_decoder_model_resource_table_get_category(
-    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, int mrtIdx);
+    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, uint32_t mrtIdx);
 
 /**
  * @brief Gets the shape of the idx-entry in the model resource table
@@ -631,7 +655,7 @@ MLSDKAPI mlsdk_decoder_mrt_category mlsdk_decoder_model_resource_table_get_categ
  * @param dimensions The pointer to the shape of the model resource table entry
  */
 MLSDKAPI void mlsdk_decoder_model_resource_table_get_tensor_shape(
-    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, int mrtIdx,
+    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, uint32_t mrtIdx,
     mlsdk_decoder_tensor_dimensions *dimensions);
 
 /**
@@ -642,10 +666,19 @@ MLSDKAPI void mlsdk_decoder_model_resource_table_get_tensor_shape(
  * @param dimensions The pointer to the strides of the model resource table entry
  */
 MLSDKAPI void mlsdk_decoder_model_resource_table_get_tensor_strides(
-    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, int mrtIdx,
+    const mlsdk_decoder_model_resource_table_decoder *const modelResourceTableDecoder, uint32_t mrtIdx,
     mlsdk_decoder_tensor_dimensions *dimensions);
 
 /**********************************************************************************************************************/
+
+/**
+ * @brief Checks if pointer points to valid constant table data
+ *
+ * @param constantTableData The pointer to the data
+ * @param size The size in bytes of the data
+ * @return True if the data is a valid section, false otherwise
+ */
+MLSDKAPI bool mlsdk_decoder_is_valid_constant_table(const void *constantTableData, uint64_t size);
 
 /**
  * @brief Create the constant table decoder
@@ -673,7 +706,7 @@ MLSDKAPI size_t mlsdk_decoder_constant_table_decoder_mem_reqs();
  * If no code is stored in the module the constantData pointer will be set to null
  */
 MLSDKAPI void mlsdk_decoder_constant_table_get_data(const mlsdk_decoder_constant_table_decoder *const constantDecoder,
-                                                    int idx, mlsdk_decoder_constant_data *constantData);
+                                                    uint32_t idx, mlsdk_decoder_constant_data *constantData);
 
 /**
  * @brief Returns the index into the module resource table associated to the constant
@@ -683,7 +716,7 @@ MLSDKAPI void mlsdk_decoder_constant_table_get_data(const mlsdk_decoder_constant
  * @return The index into the model resource table
  */
 MLSDKAPI uint32_t mlsdk_decoder_constant_table_get_mrt_index(
-    const mlsdk_decoder_constant_table_decoder *const constantDecoder, int constidx);
+    const mlsdk_decoder_constant_table_decoder *const constantDecoder, uint32_t constidx);
 
 /**
  * @brief Returns true if the constant is sparse on one dimension
@@ -693,7 +726,7 @@ MLSDKAPI uint32_t mlsdk_decoder_constant_table_get_mrt_index(
  * @return true if constant is sparse or false oherwise
  */
 MLSDKAPI bool mlsdk_decoder_constant_table_is_sparse(const mlsdk_decoder_constant_table_decoder *const constantDecoder,
-                                                     int constidx);
+                                                     uint32_t constidx);
 
 /**
  * @brief Returns the dimension on which the constant is sparse
@@ -703,7 +736,7 @@ MLSDKAPI bool mlsdk_decoder_constant_table_is_sparse(const mlsdk_decoder_constan
  * @return The dimension on which the constant is sparse
  */
 MLSDKAPI int64_t mlsdk_decoder_constant_table_get_sparsity_dimension(
-    const mlsdk_decoder_constant_table_decoder *const constantDecoder, int constidx);
+    const mlsdk_decoder_constant_table_decoder *const constantDecoder, uint32_t constidx);
 
 /**
  * @brief Returns the number of entries in the constant table

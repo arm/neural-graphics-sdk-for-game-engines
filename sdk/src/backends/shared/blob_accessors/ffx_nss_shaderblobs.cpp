@@ -27,6 +27,9 @@
 
 #include <nss_v0_1_1_int8.h>
 
+#include <ffx_nss_mirror_padding_16bit_permutations.h>
+#include <ffx_nss_mirror_padding_permutations.h>
+
 #include <ffx_nss_pre_process_16bit_permutations.h>
 #include <ffx_nss_pre_process_permutations.h>
 
@@ -46,6 +49,24 @@
     key.REVERSE_Z                      = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_REVERSE_Z);        \
     key.RESAMPLE_BICUBIC               = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC); \
     key.ALIAS_OUTPUT_TENSORS_AS_IMAGES = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_ALIAS_OUTPUT_TENSORS_AS_IMAGES);
+
+static FfxShaderBlob nssGetMirrorPaddingPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_nss_mirror_padding_PermutationKey key;
+
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_nss_mirror_padding_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_mirror_padding_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_nss_mirror_padding_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_mirror_padding_PermutationInfo, tableIndex);
+    }
+}
 
 static FfxShaderBlob nssGetPreprocessPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
@@ -149,6 +170,13 @@ FfxErrorCode nssGetPermutationBlobByIndex(FfxNssPass passId, uint32_t permutatio
 
     switch (passId)
     {
+    case FFX_NSS_PASS_MIRROR_PADDING:
+    {
+        FfxShaderBlob blob = nssGetMirrorPaddingPassPermutationBlobByIndex(permutationOptions, is16bit);
+        memcpy(outShaderBlob, &blob, sizeof(FfxShaderBlob));
+        return FFX_OK;
+    }
+
     case FFX_NSS_PASS_PREPROCESS:
     {
         FfxShaderBlob blob = nssGetPreprocessPassPermutationBlobByIndex(permutationOptions, is16bit);

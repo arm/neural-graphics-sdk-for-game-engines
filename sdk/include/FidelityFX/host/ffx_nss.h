@@ -82,12 +82,12 @@ extern "C" {
 typedef enum FfxNssPass
 {
 
-    FFX_NSS_PASS_PREPROCESS  = 0,  ///< A pass which performs preprocessing.
-    FFX_NSS_PASS_DATA_GRAPH  = 1,  ///< A pass which performs data graph.
-    FFX_NSS_PASS_POSTPROCESS = 2,  ///< A pass which performs postprocessing.
-    FFX_NSS_PASS_DEBUG_VIEW  = 3,  ///< A pass which overlays debug views.
-
-    FFX_NSS_PASS_COUNT  ///< The number of passes performed by NSS.
+    FFX_NSS_PASS_MIRROR_PADDING = 0,  ///< A pass which performs mirror padding.
+    FFX_NSS_PASS_PREPROCESS     = 1,  ///< A pass which performs preprocessing.
+    FFX_NSS_PASS_DATA_GRAPH     = 2,  ///< A pass which performs data graph.
+    FFX_NSS_PASS_POSTPROCESS    = 3,  ///< A pass which performs postprocessing.
+    FFX_NSS_PASS_DEBUG_VIEW     = 4,  ///< A pass which overlays debug views.
+    FFX_NSS_PASS_COUNT                ///< The number of passes performed by NSS.
 } FfxNssPass;
 
 /// An enumeration of all the quality modes supported by NSS.
@@ -130,7 +130,8 @@ typedef enum FfxNssInitializationFlagBits
     FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC       = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
     FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES = (1 << 5),  ///< A bit indicating tensor image aliasing is enable.
     FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT            = (1 << 6),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
-    FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
+    FFX_NSS_CONTEXT_FLAG_DISABLE_PADDING        = (1 << 7),  ///< A bit indicating that the padding is disabled in sdk.
+    FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 8),  ///< A bit indicating that the runtime should check some API values and report issues.
 } FfxNssInitializationFlagBits;
 
 /// Pass a string message
@@ -149,11 +150,11 @@ typedef void (*FfxNssMessage)(FfxMsgType type, const wchar_t* message);
 /// @ingroup ffxNss
 typedef struct FfxNssContextDescription
 {
-    FfxNssShaderQualityMode qualityMode;     ///< What shader quality mode to use
-    uint32_t                flags;           ///< A collection of <c><i>FfxNssInitializationFlagBits</i></c>.
-    FfxDimensions2D         maxRenderSize;   ///< The maximum size that rendering will be performed at.
-    FfxDimensions2D         maxUpscaleSize;  ///< The size of the output resolution targeted by the upscaling process.
-    FfxDimensions2D         displaySize;     ///< The size of the presentation resolution targeted by the upscaling process.
+    FfxNssShaderQualityMode qualityMode;    ///< What shader quality mode to use
+    uint32_t                flags;          ///< A collection of <c><i>FfxNssInitializationFlagBits</i></c>.
+    FfxDimensions2D         maxRenderSize;  ///< The size that rendering will be performed at. This must match the size when dispatching.
+    FfxDimensions2D maxUpscaleSize;         ///< The size of the output resolution targeted by the upscaling process. This must match the size when dispatching.
+    FfxDimensions2D displaySize;            ///< The size of the presentation resolution targeted by the upscaling process.
 
     FfxInterface  backendInterface;  ///< A set of pointers to the backend implementation for FidelityFX SDK
     FfxNssMessage fpMessage;         ///< A pointer to a function that can receive messages from the runtime.

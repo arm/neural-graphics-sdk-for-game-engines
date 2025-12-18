@@ -138,7 +138,7 @@ layout(set = 0, binding = NSS_BIND_CB_NSS, std140) uniform cbNSS_t
     float2   _InvOutputDims;      //   8 B
     float2   _InvInputDims;       //   8 B
     float2   _MotionVectorScale;  //   8 B
-    float2   _Padding0;           //  8 B (padding to 16 byte boundary)
+    int32_t2 _UnpaddedInputDims;  //   8 B
 
     // ───────────────  16bit precision objects  ────────────────
     half4    _QuantParamsSNORM;    //   8 B  (.xy for quantize, .zw for dequantize)
@@ -208,6 +208,11 @@ float2 InvOutputDims()
 float2 InvInputDims()
 {
     return cbNSS._InvInputDims;
+}
+
+int32_t2 UnpaddedInputDims()
+{
+    return cbNSS._UnpaddedInputDims;
 }
 
 float2 MotionVectorScale()
@@ -417,6 +422,80 @@ layout(set = 0, binding = 1001) uniform sampler s_LinearClamp;
         float4    c1    = mix(c10, c11, frac.y);                                                           \
         return half4(mix(c0, c1, frac.x));                                                                 \
     }
+#endif
+
+//=========================================================================
+// Mirror padding functions
+//=========================================================================
+
+//-------------------------------------------------------------------------
+// Input: unpadded resources
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_UNPADDED_COLOR)
+layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_COLOR) uniform mediump texture2D r_unpadded_color;
+half3 LoadUnpaddedColor(float2 uv)
+{
+    return half3(textureLod(sampler2D(r_unpadded_color, s_LinearClamp), uv, 0).rgb);
+}
+#endif
+
+#if defined(NSS_BIND_SRV_UNPADDED_DEPTH)
+layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_DEPTH) uniform mediump texture2D r_unpadded_depth;
+float LoadUnpaddedDepth(float2 uv)
+{
+    return textureLod(sampler2D(r_unpadded_depth, s_LinearClamp), uv, 0).r;
+}
+#endif
+
+#if defined(NSS_BIND_SRV_UNPADDED_DEPTH_TM1)
+layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_DEPTH_TM1) uniform mediump texture2D r_unpadded_depth_tm1;
+float LoadUnpaddedDepthTm1(float2 uv)
+{
+    return textureLod(sampler2D(r_unpadded_depth_tm1, s_LinearClamp), uv, 0).r;
+}
+#endif
+
+#if defined(NSS_BIND_SRV_UNPADDED_MOTION)
+layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_MOTION) uniform mediump texture2D r_unpadded_motion;
+half2 LoadUnpaddedMotion(float2 uv)
+{
+    return half2(textureLod(sampler2D(r_unpadded_motion, s_LinearClamp), uv, 0).rg);
+}
+#endif
+
+//-------------------------------------------------------------------------
+// Output: padded resources
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_UAV_PADDED_COLOR)
+layout(set = 0, binding = NSS_BIND_UAV_PADDED_COLOR, r11f_g11f_b10f) uniform mediump image2D rw_input_color_jittered;
+void StorePaddedColor(int32_t2 coord, half3 color)
+{
+    imageStore(rw_input_color_jittered, coord, half4(color, 1.0HF));
+}
+#endif
+
+#if defined(NSS_BIND_UAV_PADDED_DEPTH)
+layout(set = 0, binding = NSS_BIND_UAV_PADDED_DEPTH, r32f) uniform mediump image2D rw_input_depth;
+void StorePaddedDepth(int32_t2 coord, float depth)
+{
+    imageStore(rw_input_depth, coord, float4(depth, 0.0f, 0.0f, 1.0f));
+}
+#endif
+
+#if defined(NSS_BIND_UAV_PADDED_MOTION)
+layout(set = 0, binding = NSS_BIND_UAV_PADDED_MOTION, rg16f) uniform mediump image2D rw_input_motion_vectors;
+void StorePaddedMotion(int32_t2 coord, half2 motion)
+{
+    imageStore(rw_input_motion_vectors, coord, half4(motion, 0.0HF, 1.0HF));
+}
+#endif
+
+#if defined(NSS_BIND_UAV_PADDED_DEPTH_TM1)
+layout(set = 0, binding = NSS_BIND_UAV_PADDED_DEPTH_TM1, r32f) uniform mediump image2D rw_prev_depth;
+void StorePaddedDepthTm1(int32_t2 coord, float depth)
+{
+    imageStore(rw_prev_depth, coord, float4(depth, 0.0f, 0.0f, 1.0f));
+}
 #endif
 
 //=========================================================================

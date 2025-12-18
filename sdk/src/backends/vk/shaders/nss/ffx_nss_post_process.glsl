@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
-#version 450
+#version 460
 #extension GL_EXT_samplerless_texture_functions : require
 #extension GL_GOOGLE_include_directive : require
 #extension GL_ARM_tensors : require
@@ -40,10 +40,10 @@
 
 
 #ifndef FFX_NSS_THREAD_GROUP_WIDTH
-#define FFX_NSS_THREAD_GROUP_WIDTH 8
+#define FFX_NSS_THREAD_GROUP_WIDTH 16
 #endif // FFX_NSS_THREAD_GROUP_WIDTH
 #ifndef FFX_NSS_THREAD_GROUP_HEIGHT
-#define FFX_NSS_THREAD_GROUP_HEIGHT 8
+#define FFX_NSS_THREAD_GROUP_HEIGHT 16
 #endif // FFX_NSS_THREAD_GROUP_HEIGHT
 #ifndef FFX_NSS_THREAD_GROUP_DEPTH
 #define FFX_NSS_THREAD_GROUP_DEPTH 1

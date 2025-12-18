@@ -52,6 +52,8 @@ static uint32_t ConvertContextFlagsNss(uint32_t apiFlags)
         outFlags |= FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT)
         outFlags |= FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_DISABLE_PADDING;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
         outFlags |= FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING;
     return outFlags;

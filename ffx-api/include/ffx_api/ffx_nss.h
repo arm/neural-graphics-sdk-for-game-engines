@@ -49,7 +49,8 @@ enum FfxApiCreateContextNssFlags
     FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC       = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
     FFX_API_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES = (1 << 5),  ///< A bit indicating tensor image aliasing is enable.
     FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT            = (1 << 6),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
-    FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
+    FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING        = (1 << 7),  ///< A bit indicating that the padding is disabled in sdk.
+    FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 8),  ///< A bit indicating that the runtime should check some API values and report issues.
 };
 
 /// @ingroup ffxNss

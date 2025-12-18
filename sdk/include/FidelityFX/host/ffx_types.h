@@ -1237,6 +1237,17 @@ typedef struct FfxDataGraphJobDescription
     FfxTensor        uavTensors[FFX_MAX_NUM_TENSORS];  ///< UAV tensor resources to be bound in the compute job.
 } FfxDataGraphJobDescription;
 
+/// An enumeration for different copy mode for GPU copy job
+///
+/// @ingroup SDKTypes
+typedef enum FfxCopyJobMode
+{
+
+    FFX_GPU_COPY_SRC_EXTENT = 0,  ///< When performing a copy, use the extent of the source resource.
+    FFX_GPU_COPY_DST_EXTENT = 1,  ///< When performing a copy, use the extent of the destination resource.
+    FFX_GPU_COPY_MIN_EXTENT = 2,  ///< When performing a copy, use the minimum extent of the source and destination resources.
+} FfxCopyJobMode;
+
 /// A structure describing a copy render job.
 ///
 /// @ingroup SDKTypes
@@ -1247,6 +1258,7 @@ typedef struct FfxCopyJobDescription
     FfxResourceInternal dst;        ///< Destination resource for the copy.
     uint32_t            dstOffset;  ///< Offset into the destination buffer in bytes.
     uint32_t            size;       ///< Number of bytes to copy (Set to 0 to copy entire buffer).
+    FfxCopyJobMode      copyMode;   ///< Copy mode to use when performing the copy.
 } FfxCopyJobDescription;
 
 typedef struct FfxDiscardJobDescription
