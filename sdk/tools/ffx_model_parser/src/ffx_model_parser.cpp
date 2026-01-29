@@ -26,6 +26,7 @@
 #include <locale>
 #include <codecvt>
 #include <string>
+#include <fstream>
 
 static std::wstring UTF8ToWChar(const std::string& str)
 {
@@ -189,23 +190,25 @@ namespace arm
             // For each descriptor set binding:
             for (int slot = 0; slot < mlsdk_decoder_binding_slot_size(sequenceDecoder, handle); ++slot)
             {
-                int bindingId = mlsdk_decoder_binding_slot_binding_id(sequenceDecoder, handle, slot);
-                int mrtIdx    = mlsdk_decoder_binding_slot_mrt_index(sequenceDecoder, handle, slot);
+                const auto bindingId = mlsdk_decoder_binding_slot_binding_id(sequenceDecoder, handle, slot);
+                const auto mrtIdx    = mlsdk_decoder_binding_slot_mrt_index(sequenceDecoder, handle, slot);
+
+                const auto category = mlsdk_decoder_model_resource_table_get_category(resourceTableDecoder, mrtIdx);
 
                 std::string guidStr = "Resource_" + std::to_string(bindingId);
-                if (mlsdk_decoder_model_resource_table_get_category(resourceTableDecoder, mrtIdx) == mlsdk_decoder_mrt_category_input)
+                if (category == mlsdk_decoder_mrt_category_input)
                 {
                     guidStr.append("_input");
                 }
-                else if (mlsdk_decoder_model_resource_table_get_category(resourceTableDecoder, mrtIdx) == mlsdk_decoder_mrt_category_output)
+                else if (category == mlsdk_decoder_mrt_category_output)
                 {
                     guidStr.append("_output");
                 }
-                else if (mlsdk_decoder_model_resource_table_get_category(resourceTableDecoder, mrtIdx) == mlsdk_decoder_mrt_category_intermediate)
+                else if (category == mlsdk_decoder_mrt_category_intermediate)
                 {
                     guidStr.append("_intermediate");
                 }
-                else if (mlsdk_decoder_model_resource_table_get_category(resourceTableDecoder, mrtIdx) == mlsdk_decoder_mrt_category_constant)
+                else if (category == mlsdk_decoder_mrt_category_constant)
                 {
                     guidStr.append("_constant");
                 }
@@ -218,7 +221,7 @@ namespace arm
                 mlsdk_decoder_model_resource_table_get_tensor_shape(resourceTableDecoder, mrtIdx, &dims);
                 mlsdk_vk_format format = mlsdk_decoder_get_vk_format(resourceTableDecoder, mrtIdx);
 
-                infos.emplace_back(ResourceInfo(guidStr, set, bindingId, format, dims));
+                infos.emplace_back(guidStr, category, set, bindingId, format, dims);
             }
         }
         return infos;
@@ -343,6 +346,17 @@ namespace arm
 
         graphHeaderFiles.push_back(fileName + std::to_string(moduleIdx) + ".h");
 
+        {
+            //TODO: dump spv binary for debug. Remove this later.
+            std::string   fileName = vgfFileName + "_graph_" + std::to_string(moduleIdx) + ".spv";
+            std::ofstream outFile(fileName, std::ios::binary);
+            if (outFile)
+            {
+                outFile.write(reinterpret_cast<const char*>(spirv.data()), spirv.size());
+                outFile.close();
+            }
+        }
+
 #if defined(_WIN32)
         const std::wstring wFileName(fileName.begin(), fileName.end());
         std::wstring       outputFile = outputPath;
@@ -362,78 +376,98 @@ namespace arm
 
         fprintf(fp, "static const char g_%s_entry_point[] = \"%s\";\n\n", varName.c_str(), entryPoint.c_str());
 
-        fprintf(fp, "static const uint32_t g_%s_tensor_nums = %d;\n\n", varName.c_str(), resourceInfos.size());
-
-        fprintf(fp, "static const char* g_%s_tensor_names[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
+        std::vector<const ResourceInfo*> inputs;
+        std::vector<const ResourceInfo*> outputs;
+        for (const auto& resourceInfo : resourceInfos)
         {
-            fprintf(fp, " \"%s\",", resourceInfos[i].name.c_str());
-        }
-
-        fprintf(fp, " };\n\n");
-
-        fprintf(fp, "static const uint32_t g_%s_tensor_sets[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, " %d,", resourceInfos[i].set);
-        }
-
-        fprintf(fp, " };\n\n");
-
-        fprintf(fp, "static const uint32_t g_%s_tensor_bindings[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, " %d,", resourceInfos[i].id);
-        }
-
-        fprintf(fp, " };\n\n");
-
-        fprintf(fp, "static const uint32_t g_%s_tensor_formats[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, " %d,", resourceInfos[i].format);
-        }
-
-        fprintf(fp, " };\n\n");
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, "static const uint32_t g_%s_tensor_dim_size_%d = %d;\n\n", varName.c_str(), i, resourceInfos[i].dims.size);
-        }
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, "static const uint64_t g_%s_tensor_dims_%d[] = { ", varName.c_str(), i);
-            for (int j = 0; j < resourceInfos[i].dims.size; j++)
+            if (resourceInfo.category == mlsdk_decoder_mrt_category_input)
             {
-                fprintf(fp, " %d,", resourceInfos[i].dims.data[j]);
+                inputs.push_back(&resourceInfo);
             }
+            else if (resourceInfo.category == mlsdk_decoder_mrt_category_output)
+            {
+                outputs.push_back(&resourceInfo);
+            }
+        }
+
+        for (const auto& category : {"input", "output"})
+        {
+            const auto& categorizedResourceInfos = (category == std::string{"input"}) ? inputs : outputs;
+
+            fprintf(fp, "static const uint32_t g_%s_%s_tensor_nums = %llu;\n\n", varName.c_str(), category, categorizedResourceInfos.size());
+
+            fprintf(fp, "static const char* g_%s_%s_tensor_names[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " \"%s\",", categorizedResourceInfos[i]->name.c_str());
+            }
+
+            fprintf(fp, " };\n\n");
+
+            fprintf(fp, "static const uint32_t g_%s_%s_tensor_sets[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " %d,", categorizedResourceInfos[i]->set);
+            }
+
+            fprintf(fp, " };\n\n");
+
+            fprintf(fp, "static const uint32_t g_%s_%s_tensor_bindings[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " %d,", categorizedResourceInfos[i]->id);
+            }
+
+            fprintf(fp, " };\n\n");
+
+            fprintf(fp, "static const uint32_t g_%s_%s_tensor_formats[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " %d,", categorizedResourceInfos[i]->format);
+            }
+
+            fprintf(fp, " };\n\n");
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(
+                    fp, "static const uint32_t g_%s_%s_tensor_dim_size_%d = %llu;\n\n", varName.c_str(), category, i, categorizedResourceInfos[i]->dims.size);
+            }
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, "static const int64_t g_%s_%s_tensor_dims_%d[] = { ", varName.c_str(), category, i);
+                for (int j = 0; j < categorizedResourceInfos[i]->dims.size; j++)
+                {
+                    fprintf(fp, " static_cast<int64_t>(%lldULL),", categorizedResourceInfos[i]->dims.data[j]);
+                }
+                fprintf(fp, " };\n\n");
+            }
+
+            fprintf(fp, "static const uint32_t g_%s_%s_tensor_dim_size[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " g_%s_%s_tensor_dim_size_%d,", varName.c_str(), category, i);
+            }
+
+            fprintf(fp, " };\n\n");
+
+            fprintf(fp, "static const int64_t* g_%s_%s_tensor_dims[] = { ", varName.c_str(), category);
+
+            for (int i = 0; i < categorizedResourceInfos.size(); i++)
+            {
+                fprintf(fp, " g_%s_%s_tensor_dims_%d,", varName.c_str(), category, i);
+            }
+
             fprintf(fp, " };\n\n");
         }
 
-        fprintf(fp, "static const uint32_t g_%s_tensor_dim_size[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, " g_%s_tensor_dim_size_%d,", varName.c_str(), i);
-        }
-
-        fprintf(fp, " };\n\n");
-
-        fprintf(fp, "static const uint64_t* g_%s_tensor_dims[] = { ", varName.c_str());
-
-        for (int i = 0; i < resourceInfos.size(); i++)
-        {
-            fprintf(fp, " g_%s_tensor_dims_%d,", varName.c_str(), i);
-        }
-
-        fprintf(fp, " };\n\n");
-
-        fprintf(fp, "static const uint32_t g_%s_data_size = %d;\n\n", varName.c_str(), spirv.size());
+        fprintf(fp, "static const uint32_t g_%s_data_size = %llu;\n\n", varName.c_str(), spirv.size());
 
         fprintf(fp, "static const unsigned char g_%s_data[] = {\n", varName.c_str());
 
@@ -496,13 +530,20 @@ namespace arm
         fprintf(fp, "    const char*          graphEntryPoint;\n");
         fprintf(fp, "    const uint32_t       graphDataSize;\n");
         fprintf(fp, "    const unsigned char* graphData;\n\n");
-        fprintf(fp, "    const uint32_t       tensorNums;\n");
-        fprintf(fp, "    const char**         tensorNames;\n");
-        fprintf(fp, "    const uint32_t*      tensorSets;\n");
-        fprintf(fp, "    const uint32_t*      tensorBindings;\n");
-        fprintf(fp, "    const uint32_t*      tensorFormats;\n");
-        fprintf(fp, "    const uint32_t*      tensorDimSize;\n");
-        fprintf(fp, "    const uint64_t**     tensorDims;\n");
+        fprintf(fp, "    const uint32_t       inputTensorNums;\n");
+        fprintf(fp, "    const char**         inputTensorNames;\n");
+        fprintf(fp, "    const uint32_t*      inputTensorSets;\n");
+        fprintf(fp, "    const uint32_t*      inputTensorBindings;\n");
+        fprintf(fp, "    const uint32_t*      inputTensorFormats;\n");
+        fprintf(fp, "    const uint32_t*      inputTensorDimSize;\n");
+        fprintf(fp, "    const int64_t**     inputTensorDims;\n");
+        fprintf(fp, "    const uint32_t       outputTensorNums;\n");
+        fprintf(fp, "    const char**         outputTensorNames;\n");
+        fprintf(fp, "    const uint32_t*      outputTensorSets;\n");
+        fprintf(fp, "    const uint32_t*      outputTensorBindings;\n");
+        fprintf(fp, "    const uint32_t*      outputTensorFormats;\n");
+        fprintf(fp, "    const uint32_t*      outputTensorDimSize;\n");
+        fprintf(fp, "    const int64_t**     outputTensorDims;\n");
 
         fprintf(fp, "} %s_Info;\n\n", varName.c_str());
 
@@ -520,13 +561,20 @@ namespace arm
         fprintf(fp, "    g_%s_graph_%d_entry_point, \n", varName.c_str(), 0);
         fprintf(fp, "    g_%s_graph_%d_data_size, \n", varName.c_str(), 0);
         fprintf(fp, "    g_%s_graph_%d_data, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_nums, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_names, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_sets, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_bindings, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_formats, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_dim_size, \n", varName.c_str(), 0);
-        fprintf(fp, "    g_%s_graph_%d_tensor_dims \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_nums, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_names, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_sets, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_bindings, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_formats, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_dim_size, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_input_tensor_dims, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_nums, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_names, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_sets, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_bindings, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_formats, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_dim_size, \n", varName.c_str(), 0);
+        fprintf(fp, "    g_%s_graph_%d_output_tensor_dims \n", varName.c_str(), 0);
 
         fprintf(fp, "};\n\n");
     }
@@ -679,7 +727,7 @@ namespace arm
                     mlsdk_vk_format format = mlsdk_decoder_get_vk_format(resourceTableDecoder, resourceIdx);
 
                     auto info = TensorInfo{
-                        std::vector<uint64_t>(dims.data, dims.data + dims.size),
+                        std::vector<int64_t>(dims.data, dims.data + dims.size),
                         VkFormat(format),
                         false,
                         -1,
@@ -725,7 +773,7 @@ namespace arm
 
             // Create scenario-runner constant tensor object
             TensorInfo tensorInfo;
-            tensorInfo.shape             = std::vector<uint64_t>(constantDims.data, constantDims.data + constantDims.size);
+            tensorInfo.shape             = std::vector<int64_t>(constantDims.data, constantDims.data + constantDims.size);
             tensorInfo.format            = static_cast<VkFormat>(mlsdk_decoder_get_vk_format(resourceTableDecoder, mrt_idx));
             tensorInfo.sparsityDimension = mlsdk_decoder_constant_table_get_sparsity_dimension(constantDecoder, constantIdx);
 

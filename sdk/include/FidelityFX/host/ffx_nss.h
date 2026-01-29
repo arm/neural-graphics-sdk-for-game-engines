@@ -130,8 +130,7 @@ typedef enum FfxNssInitializationFlagBits
     FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC       = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
     FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES = (1 << 5),  ///< A bit indicating tensor image aliasing is enable.
     FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT            = (1 << 6),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
-    FFX_NSS_CONTEXT_FLAG_DISABLE_PADDING        = (1 << 7),  ///< A bit indicating that the padding is disabled in sdk.
-    FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 8),  ///< A bit indicating that the runtime should check some API values and report issues.
+    FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
 } FfxNssInitializationFlagBits;
 
 /// Pass a string message
@@ -174,13 +173,9 @@ typedef struct FfxNssDispatchDescription
     FfxCommandList commandList;  ///< The <c><i>FfxCommandList</i></c> to record NSS rendering commands into.
     FfxResource    color;        ///< A <c><i>FfxResource</i></c> containing the color buffer for the current frame (at render resolution).
     FfxResource    depth;        ///< A <c><i>FfxResource</i></c> containing 32bit depth values for the current frame (at render resolution).
-    FfxResource    depthTm1;     ///< A <c><i>FfxResource</i></c> containing 32bit depth values for the previous frame (at render resolution).
     FfxResource
                 motionVectors;  ///< A <c><i>FfxResource</i></c> containing 2-dimensional motion vectors (at render resolution if <c><i>FFX_NSS_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS</i></c> is not set).
-    FfxResource outputTm1;      ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame (at presentation resolution).
     FfxResource output;         ///< A <c><i>FfxResource</i></c> containing the output color buffer for the current frame (at presentation resolution).
-    FfxResource
-        debugViews;  ///< A <c><i>FfxResource</i></c> containing the debug views if DRAW_DEBUG_VIEW dispatch flag is turned on. Can be left nullptr if not using it.
     ///< Necessary because we will pollute the colour history if we render debug views directly in the output buffer.
     ///< (We could also use an internally FFX managed colour history, but that would imply doing an extra blit every frame to copy the input colour into history!)
 

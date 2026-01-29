@@ -32,15 +32,6 @@
 #include "nss/ffx_nss_callbacks_glsl.h"
 #include "nss/ffx_nss_preprocess.h"
 
-#ifndef FFX_NSS_THREAD_GROUP_WIDTH
-#define FFX_NSS_THREAD_GROUP_WIDTH 16
-#endif // FFX_NSS_THREAD_GROUP_WIDTH
-#ifndef FFX_NSS_THREAD_GROUP_HEIGHT
-#define FFX_NSS_THREAD_GROUP_HEIGHT 16
-#endif // FFX_NSS_THREAD_GROUP_HEIGHT
-#ifndef FFX_NSS_THREAD_GROUP_DEPTH
-#define FFX_NSS_THREAD_GROUP_DEPTH 1
-#endif // FFX_NSS_THREAD_GROUP_DEPTH
 #ifndef FFX_NSS_NUM_THREADS
 #define FFX_NSS_NUM_THREADS layout (local_size_x = FFX_NSS_THREAD_GROUP_WIDTH, local_size_y = FFX_NSS_THREAD_GROUP_HEIGHT, local_size_z = FFX_NSS_THREAD_GROUP_DEPTH) in;
 #endif // FFX_NSS_NUM_THREADS

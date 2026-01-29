@@ -2,13 +2,21 @@
 
 Mobile devices increasingly require more complex graphic experience, which increases pressure on GPU performance, power budgets, and memory bandwidth. Traditional rendering techniques are effective, but they are reaching their limits in delivering high-resolution, high-frame-rate graphics within the tight constraints of mobile hardware.
 
-Neural Super Sampling addresses these limitations as a temporal frame upsampling technique powered by neural technologies, improving visual fidelity by reconstructing high-resolution frames from lower-resolution inputs. It is specifically optimized for mobile applications to achieve:
+The Neural Super Sampling addresses these limitations. The Neural Super Sampling is a temporal frame upsampling technique that improves visual fidelity by reconstructing high-resolution frames from lower-resolution inputs. The Neural Super Sampling is specifically optimized for mobile applications to achieve:
 
 • High image quality
 
 • Computational efficiency
 
 • Minimal bandwidth usage
+
+## Platform Support
+
+Windows 11 x64.
+
+Linux x64.
+
+Android. (Validated on Android 16)
 
 ## Integration guidelines
 
@@ -17,7 +25,7 @@ Neural Super Sampling addresses these limitations as a temporal frame upsampling
 Build from source code: copy SDK folder into your project, add sdk as a sub project through CmakeLists.txt:
 
 ```cmake
-add_subdirectory(path/to/sdk).
+add_subdirectory(path/to/sdk)
 ```
 
 Or if you use prebuilt libs, need to link them to your project.
@@ -64,7 +72,7 @@ backendDesc.vkPhysicalDevice = getVulkanPhysicalDevice();
 backendDesc.vkInstance = getVulkanInstance();
 backendDesc.vkDeviceProcAddr = vkGetDeviceProcAddr; //vulkan function pointer
 backendDesc.vkGetInstanceProcAddr = vkGetInstanceProcAddr; //vulkan function pointer
- 
+
 ffx::CreateContextDescNss createContextNss{};
 createContextNss.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_NSS;
 createContextNss.maxRenderSize = {initSettings.m_srcRes.x(), initSettings.m_srcRes.y()};
@@ -98,7 +106,6 @@ qualityMode: Select shader quality mode. This bit is currently unused. It will b
 | FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC | Sample using Bicubic filtering. |
 | FFX_API_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES | Tensor image aliasing is enabled. Will load tensors through "texture" functions. |
 | FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT | Runtime should allow 16bit resources to be used. |
-| FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING | The sdk itself will not do the padding, the user should do the padding instead. |
 | FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING | 	Runtime should check some API values and report issues. |
 
 #### ffxDestroyContext
@@ -128,7 +135,7 @@ versionQuery.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_NSS;
 uint64_t versionCount = 0;
 versionQuery.outputCount = &versionCount;
 ffxQuery(nullptr, &versionQuery.header); //Null context pointer
- 
+
 std::vector<uint64_t> versionIds;
 std::vector<const char*> versionNames;
 versionIds.resize(versionCount);
@@ -152,11 +159,8 @@ dispatchNss.commandList   = static_cast<CommandBufferImpl&>(cmdb).getHandle();
 //Get input resources
 dispatchNss.color = getColor;
 dispatchNss.depth = getDepth;
-dispatchNss.depthTm1 = getDepthTm1
 dispatchNss.motionVectors = getMotion;
-dispatchNss.outputTm1 = getOutputTm1;
 dispatchNss.output = getOutput;
-dispatchNss.debugViews = getDebugViwe;
  
 dispatchNss.jitterOffset.x      = jitterOffset.x();
 dispatchNss.jitterOffset.y      = jitterOffset.y();
@@ -173,9 +177,17 @@ dispatchNss.motionVectorScale.y = -1.0f * renderSize.y();
 dispatchNss.frameTimeDelta         = frameTimeDelta;
 dispatchNss.reset                  = reset;
 dispatchNss.flags                  = enableDebugView ? FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW : 0;
- 
+
 ffx::ReturnCode retCode = ffx::Dispatch(m_nssContext, dispatchNss);
 ```
+
+When debug view is enabled, the output splits into 12 pieces:
+|  | Column 1 | Column 2 | Column 3 | Column 4 |
+|----------|------------|--------|-----------|---------|
+| Row 1 | Warpped history | jittered color | feed back tensor | disocclusion mask and luma derivative|
+| Row 2 | Internal tensors K0 | Internal tensors K1 | Internal tensors K2 | Internal tensors K3 |
+| Row 3 | Motion vector | KPN weight(calculated from internal tensors) | temporal parameters | upscaledOutput |
+
 
 ##### ffx::DispatchDescNss
 
@@ -207,61 +219,214 @@ flags: Only contains [`FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW`](../../ffx-api
 |----------|------------|--------|-----------|---------|
 | color | render resolution | R11G11B10 | float | The render resolution color buffer for the current frame provided by the application. Must be HDR format. |
 | depth | render resolution | R32 | float | The render resolution depth buffer for the current frame provided by the application. |
-| depthTm1 | render resolution | R32 | float | Last frame's depth texture. "Tm1" means "time minus 1". |
 | motionVectors | render resolution | R16G16 | float | The 2D motion vectors for the current frame are provided by the application.<br>UV(T-1) = UV(T) + Motion.<br>Normalized vectors, range in [-1, 1]. |
 | output | upscaled resolution | R11G11B10 | float | Upscaled output. |
-| outputTm1 | upscaled resolution | R11G11B10 | float | Last frame's upscaled output. |
-| debugView | upscaled resolution | R11G11B10 | float | Render internal resources for easy debug. Debug view will split output into 12 pieces:<br>Row1: Warpped history, jittered color, feed back tensor, disocclusion mask and luma derivative.<br>Row2: Internal tensors, K0~K3.<br>Row3: Motion vector, KPN weight(calculated from internal tensors), temporal parameters, upscaledOutput |
 
-##### Padding and truncate
+## NSS Sample
 
-Padding input: Clamp_net requires the width/height("render resolution") of the input in multiple of 8, need to pad for input if necessary. For example, if your input resolution is 960x540, need to pad it to 960x544.
+You can run the NSS sample to see how to use NSS for high‑quality temporal upscaling. The NSS sample project is derived from the Khronos Vulkan Samples project, commit b9961792604af2ede4c9d0868947de2a8eccd549.
 
-It's recommended to use "Mirror padding" in bottom-right corner:
+### Overview
 
-![invert](./NSS_MirrorPadding.svg "A diagram showing mirror padding.")
+The program flow of the NSS sample is:
 
-Sample code:
-```glsl
-#version 450
- 
-layout(push_constant) uniform Constants {
-    uvec2 inputSize;
-    uvec2 paddedInputSize;
-} g_pc;
- 
-layout(location = 0) in vec2 uv;
- 
-layout(location = 0) out vec4 outColor;
-layout(location = 1) out float outDepth;
-layout(location = 2) out vec2 outFlow;
- 
-layout(set = 0, binding = 0) uniform sampler2D inputColorTex;
-layout(set = 0, binding = 1) uniform sampler2D inputDepthTex;
-layout(set = 0, binding = 2) uniform sampler2D inputFlowTex;
- 
-void main() {
-    Vec2 inputUV = (uv * Vec2(m_paddedInputSize) / Vec2(g_pc.m_inputSize));
- 
-    F32 MirrorBoundary = 1.0 - 0.5 / g_pc.m_inputSize;
-    if(inputUV.x >= 1.0f)
-    {
-        inputUV.x = 2 * MirrorBoundary - inputUV.x;
-    }
-    if(inputUV.y >= 1.0f)
-    {
-        inputUV.y = 2 * MirrorBoundary - inputUV.y;
-    }
-    uv = inputUV;
- 
-    outColor = texture(inputColorTex, coord);
-    outDepth = texture(inputDepthTex, coord).r;
-    outFlow = motionVectorFactor * texture(inputFlowTex, coord).rg;
-}
+1. The scene pipeline produces low-resolution **color**, **velocity**, and **depth** images.
+2. These images are passed to **NSS dispatch** to upscale into a high-resolution output.
+3. The result is passed to the post-processing pipeline to render the final image to the screen.
+
+You can choose a display mode:
+
+- High-resolution output
+- Low-resolution color/velocity/depth buffers
+- NSS debug view
+
+### Requirements
+
+#### Before you begin
+
+The dependencies for the NSS sample are:
+
+- CMake 3.16+
+- Python 3
+- On Windows:
+    - Visual Studio 2019 or higher
+- On Android:
+    - Android Studio 2024.2.1+ (recommended)
+    - Android NDK r23+
+    - Android SDK
+    - JDK 21
+
+**Note**: Sample code is not supported on Linux.
+
+#### About the sample
+
+The NSS sample is based on the SDK and must meet all SDK environment prerequisites. See: [SDK README](../../README.md)
+
+#### Procedure
+
+1. Before you can build the NSS sample, you must build the static SDK library. To build the static SDK library, run `build.py`. For example:
+
+```
+python build.py --clean -t Debug -b vk_windows_x64 --cmake-args="-DFFX_BUILD_AS_DLL=OFF"
+python build.py --clean -t Release -b vk_windows_x64 --cmake-args="-DFFX_BUILD_AS_DLL=OFF"
+
+$env:NDK_ROOT="path\to\ndk"
+python build.py --clean -t Release -b vk_android_arm --cmake-args="-DFFX_BUILD_AS_DLL=OFF"
+python build.py --clean -t Debug -b vk_android_arm --cmake-args="-DFFX_BUILD_AS_DLL=OFF"
 ```
 
-Truncate output: Output's bottom-right corner need to be truncated. For example, if your input dimension is 960x540, scale is x2, expect a 1920x1080 output. Then padded input dimension will be 960x544, padded output will be 1920*1088, output need to be truncated to 1920x1080.
+2. Initialize the submodules:
+
+```
+git submodule status
+git submodule update --init --recursive
+```
+
+### Build the sample
+
+**Note**: Always build the sample from the `samples` directory.
+
+#### Windows
+
+To build the sample on a Windows platform:
+
+```
+cd samples
+
+# Generate Visual Studio project
+cmake -G "Visual Studio 17 2022" -A x64 -B build/windows
+
+# Build
+cmake --build build/windows --config Debug --target vulkan_samples --parallel 16
+```
+
+#### Android
+
+To build the sample on an Android platform:
+
+```
+cd samples
+
+# Generate Android Gradle project
+./scripts/generate.py android
+
+# Build with Gradle
+cd build/android_gradle
+chmod +x gradlew
+./gradlew clean
+
+# You must run with JDK 21
+# When building and the android device is properly connected, it pushes assets and shaders to the device automatically.
+./gradlew assembleRelease
+
+# Install on device
+# It does not push assets and shaders to device.
+adb install app/build/outputs/apk/release/vulkan_samples-release.apk
+```
+
+Alternatively, you can use Android Studio to open `build/android_gradle` and build directly in Android Studio.
+
+### Run the sample
+
+#### Windows
+
+To run the sample on Windows, use:
+
+```
+cd samples
+.\build\windows\app\bin\Debug\AMD64\vulkan_samples.exe sample nss
+```
+
+**Note**: On Windows, always run the NSS sample from the `samples` directory. Otherwise, the NSS sample cannot find the `assets` and `shaders`.
+
+#### Android
+
+To run the sample on Android, use:
+
+```
+# If you did not push assets and shaders, you can push them manually.
+adb push /path/to/samples/assets/scenes/sponza /sdcard/Android/data/com.khronos.vulkan_samples/files/assets/scenes/sponza
+adb push /path/to/samples/assets/fonts /sdcard/Android/data/com.khronos.vulkan_samples/files/assets/fonts
+adb push /path/to/samples/shaders /sdcard/Android/data/com.khronos.vulkan_samples/files/shaders
+
+adb shell "chmod -R 777 /sdcard/Android/data/com.khronos.vulkan_samples/files/assets"
+adb shell "chmod -R 777 /sdcard/Android/data/com.khronos.vulkan_samples/files/shaders"
+
+adb shell am start-activity \
+	-n com.khronos.vulkan_samples/com.khronos.vulkan_samples.SampleLauncherActivity \
+	-e sample nss
+```
+
+#### Command line options
+
+The following tables show the sample command line options and NSS sample arguments.
+
+| Option | Description | Usage |
+|---|---|---|
+| `--width <pixels>` | Window width | `--width 1920` |
+| `--height <pixels>` | Window height | `--height 1080` |
+| `--hideui` | Hide UI | `--hideui` |
+| `--headless_surface` | Use `VK_EXT_headless_surface` | `--headless_surface` |
+| `--app-arg` | Forward arbitrary KEY=VALUE arguments to the selected sample | `--app-arg NSS_ENABLE=0` |
+
+| NSS argument | Description | Usage |
+|---|---|---|
+| `NSS_ENABLE` | enable or disable NSS | `--app-arg NSS_ENABLE=0` |
+| `NSS_SCALE_FACTOR` | NSS Upscale Factor [1.0, 3.0] | `--app-arg NSS_SCALE_FACTOR=2.0` |
+| `NSS_FLAGS` | NSS create context override flags | `--app-arg NSS_FLAGS=0x05` |
+
+#### Windows example
+
+An example of how to use command line options on Windows is:
+
+```
+# Run with 2× NSS upscaling (944×496 → 1888×992):
+.\build\windows\app\bin\Debug\AMD64\vulkan_samples.exe sample nss --width 1888 --height 992
+# Disable NSS
+.\build\windows\app\bin\Debug\AMD64\vulkan_samples.exe sample nss --app-arg NSS_ENABLE=0
+```
+
+**Note**: NSS is optimized for 2× upscaling. Other scale factors are supported but may have reduced quality.
+
+#### Android example
+
+An example of how to use command line options on Android is:
+
+```
+adb shell am start -n com.khronos.vulkan_samples/com.khronos.vulkan_samples.SampleLauncherActivity --es cmd "sample\ nss\ --hideui"
+adb shell am start -n com.khronos.vulkan_samples/com.khronos.vulkan_samples.SampleLauncherActivity --es cmd "sample\ nss\ --app-arg\ NSS_ENABLE=1,NSS_SCALE_FACTOR=2.0,NSS_FLAGS=0x85"
+```
+
+### User interface elements
+
+The NSS sample provides display modes to help debug and understand the NSS upscaling pipeline.
+
+The display modes are:
+
+- **Final Output**: the final upscaled image produced by NSS.
+- **Velocity**: color-coded motion vectors. Red/Green channels represent X/Y direction; brightness indicates magnitude.
+- **Depth**: depth buffer visualization (white = near, black = far).
+ - **NSS Debug View**: NSS internal visualization. See Debug View output in section [ffxDispatch](#ffxdispatch)
+- **Low-Res Color**: raw low-resolution rendering without NSS upscaling.
+
+#### Temporal Anti-Aliasing settings
+
+The following table shows the Temporal Anti-Aliasing (TAA) settings.
+
+| Setting | Value | Description |
+|---|---|---|
+| Jitter Scale | 0.0 - 1.0 | Sub-pixel jitter multiplier (0.0 = off, 1.0 = full) |
+| Current Jitter | Read-only | Current frame jitter offset in pixels |
+| ScaleFactor | 1.0 - 3.0 | NSS upscale factor |
+| Flags | Depends on `ffx_nss.h` | NSS create context override flags; if `0`, do not override |
+| Render | Read-only | Render resolution (low-res), computed from ScaleFactor |
+| Display | Read-only | Display resolution (high-res) |
+| LOD Bias | Read-only | Mipmap bias for texture sampling, computed from ScaleFactor |
+
+### Additional Resources
+
+- Vulkan Samples: https://github.com/KhronosGroup/Vulkan-Samples
 
 ## Limitations
 
-Only support quantized data graph.
+Only quantized data graphs are supported.

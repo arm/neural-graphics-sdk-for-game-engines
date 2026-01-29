@@ -2,3 +2,54 @@
 	path = sdk/tools/ffx_shader_compiler/libs/SPIRV-Cross
 	url = https://github.com/KhronosGroup/SPIRV-Cross
 	branch = main
+[submodule "sdk/libs/SPIRV-Headers"]
+	path = sdk/libs/SPIRV-Headers
+	url = https://github.com/arm/SPIRV-Headers.git
+	branch = staging
+[submodule "sdk/libs/SPIRV-Tools"]
+	path = sdk/libs/SPIRV-Tools
+	url = https://github.com/arm/SPIRV-Tools.git
+	branch = staging
+
+[submodule "samples/third_party/volk"]
+	path = samples/third_party/volk
+	url = https://github.com/zeux/volk.git
+[submodule "samples/third_party/glm"]
+	path = samples/third_party/glm
+	url = https://github.com/g-truc/glm
+[submodule "samples/third_party/stb"]
+	path = samples/third_party/stb
+	url = https://github.com/nothings/stb
+[submodule "samples/third_party/imgui"]
+	path = samples/third_party/imgui
+	url = https://github.com/ocornut/imgui
+[submodule "samples/third_party/tinygltf"]
+	path = samples/third_party/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
+[submodule "samples/third_party/glfw"]
+	path = samples/third_party/glfw
+	url = https://github.com/glfw/glfw.git
+[submodule "samples/third_party/hwcpipe"]
+	path = samples/third_party/hwcpipe
+	url = https://github.com/ARM-software/HWCPipe.git
+[submodule "samples/third_party/vma"]
+	path = samples/third_party/vma
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "samples/third_party/spdlog"]
+	path = samples/third_party/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "samples/third_party/ktx"]
+	path = samples/third_party/ktx
+	url = https://github.com/KhronosGroup/KTX-Software.git
+[submodule "samples/third_party/astc"]
+	path = samples/third_party/astc
+	url = https://github.com/ARM-software/astc-encoder.git
+[submodule "samples/third_party/opencl"]
+	path = samples/third_party/opencl
+	url = https://github.com/KhronosGroup/OpenCL-Headers.git
+[submodule "samples/third_party/fmt"]
+	path = samples/third_party/fmt
+	url = https://github.com/fmtlib/fmt.git
+[submodule "samples/third_party/tracy"]
+	path = samples/third_party/tracy
+	url = https://github.com/wolfpld/tracy.git

@@ -49,8 +49,7 @@ enum FfxApiCreateContextNssFlags
     FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC       = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
     FFX_API_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES = (1 << 5),  ///< A bit indicating tensor image aliasing is enable.
     FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT            = (1 << 6),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
-    FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING        = (1 << 7),  ///< A bit indicating that the padding is disabled in sdk.
-    FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 8),  ///< A bit indicating that the runtime should check some API values and report issues.
+    FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
 };
 
 /// @ingroup ffxNss
@@ -83,16 +82,12 @@ struct ffxApiDispatchDescNss
     ffxDispatchDescHeader header;
     void*                 commandList;  ///< Command list to record upscaling rendering commands into.
 
-    struct FfxApiResource color;     ///< A <c><i>FfxResource</i></c> containing the color buffer for the current frame (at render resolution).
-    struct FfxApiResource depth;     ///< A <c><i>FfxResource</i></c> containing 32bit depth values for the current frame (at render resolution).
-    struct FfxApiResource depthTm1;  ///< A <c><i>FfxResource</i></c> containing 32bit depth values for the previous frame (at render resolution).
+    struct FfxApiResource color;  ///< A <c><i>FfxResource</i></c> containing the color buffer for the current frame (at render resolution).
+    struct FfxApiResource depth;  ///< A <c><i>FfxResource</i></c> containing 32bit depth values for the current frame (at render resolution).
     struct FfxApiResource
                           motionVectors;  ///< A <c><i>FfxResource</i></c> containing 2-dimensional motion vectors (at render resolution if <c><i>FFX_NSS_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS</i></c> is not set).
-    struct FfxApiResource outputTm1;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame (at presentation resolution).
-    struct FfxApiResource output;     ///< A <c><i>FfxResource</i></c> containing the output color buffer for the current frame (at presentation resolution).
+    struct FfxApiResource output;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the current frame (at presentation resolution).
 
-    struct FfxApiResource
-        debugViews;  ///< A <c><i>FfxResource</i></c> containing the debug views if DRAW_DEBUG_VIEW dispatch flag is turned on. Can be left nullptr if not using it.
     ///< Necessary because we will pollute the colour history if we render debug views directly in the output buffer.
     ///< (We could also use an internally FFX managed colour history, but that would imply doing an extra blit every frame to copy the input colour into history!)
 

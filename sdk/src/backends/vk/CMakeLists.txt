@@ -64,8 +64,6 @@ file(GLOB PRIVATE_SOURCE
 	"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-	"${FFX_INCLUDE_PATH}/spirv-tools/*.h"
-	"${FFX_INCLUDE_PATH}/spirv-tools/*.cpp"
 )
 
 if (FFX_NSS OR FFX_ALL)
@@ -99,28 +97,15 @@ else()
     add_library(ffx_backend_vk_${FFX_PLATFORM_NAME} STATIC ${PRIVATE_SOURCE} ${PUBLIC_SOURCE} ${PRIVATE_SHADERS} ${PUBLIC_SHADERS})
 endif()
 
-if(FFX_OS_NAME STREQUAL "windows")
-	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-		message(STATUS "Building in Debug mode")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/Debug/SPIRV-Tools-opt.lib")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/Debug/SPIRV-Tools.lib")
-	else()
-		message(STATUS "Building in Release mode")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/SPIRV-Tools-opt.lib")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/SPIRV-Tools.lib")
-	endif()
-elseif(FFX_OS_NAME STREQUAL "linux")
-	if(FFX_ARCH_NAME STREQUAL "x64")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools-opt.a")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools.a")
-	else()
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools-opt-aarch64.a")
-		target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools-aarch64.a")
-	endif()
-elseif(FFX_OS_NAME STREQUAL "android")
-	target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools-opt-android-arm.a")
-	target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "${FFX_LIB_PATH}/libSPIRV-Tools-android-arm.a")
-endif()
+# Link against SPIRV-Tools built from source
+target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE SPIRV-Tools-opt)
+target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE SPIRV-Tools)
+
+# Include SPIRV-Tools headers
+target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE
+    "${FFX_LIB_PATH}/SPIRV-Tools/include"
+    "${FFX_LIB_PATH}/SPIRV-Headers/include"
+)
 
 # Depend on vulkan-headers in the sdk/include folder to ensure that the Vulkan headers are available.
 target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PUBLIC "${Vulkan_INCLUDE_DIR}")
@@ -132,8 +117,34 @@ source_group("public_source"   FILES ${PUBLIC_SOURCE})
 source_group("private_shaders" FILES ${PRIVATE_SHADERS})
 source_group("public_shaders"  FILES ${PUBLIC_SHADERS})
 
-get_filename_component(FFX_PASS_SHADER_OUTPUT_PATH ${CMAKE_CURRENT_BINARY_DIR}/../shaders/vk ABSOLUTE)
-get_filename_component(FFX_PASS_DATA_GRAPH_OUTPUT_PATH ${CMAKE_CURRENT_BINARY_DIR}/../data_graphs/vk ABSOLUTE)
+# --- Portable, short per-config output dir for generated FidelityFX headers ---
+if(CMAKE_CONFIGURATION_TYPES)
+  # Multi-config generators (Visual Studio, Xcode)
+  # Use CMAKE_CFG_INTDIR so the path is per-config *at build time* (e.g. $(Configuration)).
+  set(FFX_PASS_SHADER_OUTPUT_PATH
+      "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/ffx_shaders"
+      CACHE PATH "" FORCE)
+  set(FFX_PASS_DATA_GRAPH_OUTPUT_PATH
+      "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/ffx_graphs"
+      CACHE PATH "" FORCE)
+
+  # Pre-create real folders for all known configs at *configure* time (no genex here)
+  foreach(cfg ${CMAKE_CONFIGURATION_TYPES})
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/${cfg}/ffx_shaders")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/${cfg}/ffx_graphs")
+  endforeach()
+else()
+  # Single-config generators (Ninja/Make — Android uses Ninja)
+  set(FFX_PASS_SHADER_OUTPUT_PATH
+      "${CMAKE_BINARY_DIR}/ffx_shaders"
+      CACHE PATH "" FORCE)
+  set(FFX_PASS_DATA_GRAPH_OUTPUT_PATH
+      "${CMAKE_BINARY_DIR}/ffx_shaders"
+      CACHE PATH "" FORCE)
+
+  file(MAKE_DIRECTORY "${FFX_PASS_SHADER_OUTPUT_PATH}")
+  file(MAKE_DIRECTORY "${FFX_PASS_DATA_GRAPH_OUTPUT_PATH}")
+endif()
 
 target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PUBLIC ${FFX_INCLUDE_PATH})
 target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PUBLIC ${FFX_LIB_PATH})

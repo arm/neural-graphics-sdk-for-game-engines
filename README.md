@@ -16,7 +16,7 @@ components: Currently we support [NSS](/docs/NSS/NSS.md). All components are imp
 
 backend: All components share one backend. It will access deeper layers via Vulkan APIs.
 
-[Vulkan Emulation Layer](#vulkan-emulation-layer): Emulation layers for supporting the ML extensions and Vulkan headers before the real device is ready.(https://github.com/arm/ai-ml-emulation-layer-for-vulkan/releases)
+[Vulkan Emulation Layer](#vulkan-emulation-layer): Emulation layers for supporting the ML extensions and Vulkan headers before the real device is ready.(https://github.com/arm/ai-ml-sdk-for-vulkan)
 
 ## System requirement
 
@@ -52,27 +52,22 @@ Whatever method you use, make sure VK_LAYER_ML_Graph_Emulation is enabled before
 
 ## Build SDK
 
-Before building the SDK, you need to make sure the repository is fully cloned, including all submodules and Git LFS files:
+Follow these steps to build the SDK:
 
-1. **Clone submodules**: The SDK uses third-party libraries tracked as git submodules. After cloning the main repository, initialize and update the submodules:
-    ```bash
-    git submodule sync --recursive
-    git submodule update --init --recursive
-    ```
+1. Ensure you have python installed.
+2. Run the `build.py` cross-platform script to build the SDK.
+3. Run the script with `-h` to view detailed usage information.
 
-2. **Pull LFS files**: Some dependent files are stored using Git LFS. Pull these files with:
-    ```bash
-    git lfs install
-    git lfs pull
-    ```
-
-There are build.bat and build.sh for windows and linux to build the SDK. You can build the sdk by calling these scripts file.
-
-If everything is ok, libs for SDK will be generated into folder "./bin".
+If the SDK builds successfully, the libraries for the SDK are generated in the `./bin` folder.
 
 ## Enable extensions
 
-When create vulkan physical device, must enable necessary extensions: VulkanExtensions::kVK_ARM_tensors and VulkanExtensions::kVK_ARM_data_graph. Sample code:
+When creating vulkan physical devices, you must enable the necessary extensions:
+
+- `VulkanExtensions::kVK_ARM_tensors`
+- `VulkanExtensions::kVK_ARM_data_graph`.
+
+Sample code:
 
 ```cpp
 VkDeviceCreateInfo ci = {};
@@ -110,11 +105,9 @@ vkCreateDevice(m_physicalDevice, &ci, nullptr, &m_vkdevice)
 
 ## Limitations
 
-Only supports vulkan backend.
+The SDK only supports vulkan backend.
 
-## References
-
-For more information, refer to the [Developer guide](https://developer.arm.com/documentation/111167/latest).
+The SDK does not implement automatic GPU synchronization - it relies on the application to properly synchronize GPU work before context destruction.
 
 ## Trademarks and Copyrights
 

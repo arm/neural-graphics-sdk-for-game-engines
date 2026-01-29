@@ -129,16 +129,18 @@ BilinearSamplingData GetBilinearSamplingData(float2 fUv, int32_t2 iSize)
 layout(set = 0, binding = NSS_BIND_CB_NSS, std140) uniform cbNSS_t
 {
     // ─────────────── 32bit precision objects ───────────────
-    float4   _DeviceToViewDepth;  //  16 B
-    float4   _JitterOffset;       //  16 B (.xy = pixels, .zw = uvs)
-    float4   _JitterOffsetTm1;    //  16 B (.xy = pixels, .zw = uvs)
-    float4   _ScaleFactor;        //  16 B (.xy = scale, .zw = inv scale)
-    int32_t2 _OutputDims;         //   8 B
-    int32_t2 _InputDims;          //   8 B
-    float2   _InvOutputDims;      //   8 B
-    float2   _InvInputDims;       //   8 B
-    float2   _MotionVectorScale;  //   8 B
-    int32_t2 _UnpaddedInputDims;  //   8 B
+    float4   _DeviceToViewDepth;   //  16 B
+    float4   _JitterOffset;        //  16 B (.xy = pixels, .zw = uvs)
+    float4   _JitterOffsetTm1;     //  16 B (.xy = pixels, .zw = uvs)
+    float4   _ScaleFactor;         //  16 B (.xy = scale, .zw = inv scale)
+    int32_t2 _OutputDims;          //   8 B
+    int32_t2 _InputDims;           //   8 B
+    float2   _InvOutputDims;       //   8 B
+    float2   _InvInputDims;        //   8 B
+    float2   _MotionVectorScale;   //   8 B
+    int32_t2 _UnpaddedInputDims;   //   8 B
+    int32_t2 _UnpaddedOutputDims;  //   8 B
+    int32_t2 _Padding;             //   8 B
 
     // ───────────────  16bit precision objects  ────────────────
     half4    _QuantParamsSNORM;    //   8 B  (.xy for quantize, .zw for dequantize)
@@ -213,6 +215,11 @@ float2 InvInputDims()
 int32_t2 UnpaddedInputDims()
 {
     return cbNSS._UnpaddedInputDims;
+}
+
+int32_t2 UnpaddedOutputDims()
+{
+    return cbNSS._UnpaddedOutputDims;
 }
 
 float2 MotionVectorScale()
@@ -447,14 +454,6 @@ float LoadUnpaddedDepth(float2 uv)
 }
 #endif
 
-#if defined(NSS_BIND_SRV_UNPADDED_DEPTH_TM1)
-layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_DEPTH_TM1) uniform mediump texture2D r_unpadded_depth_tm1;
-float LoadUnpaddedDepthTm1(float2 uv)
-{
-    return textureLod(sampler2D(r_unpadded_depth_tm1, s_LinearClamp), uv, 0).r;
-}
-#endif
-
 #if defined(NSS_BIND_SRV_UNPADDED_MOTION)
 layout(set = 0, binding = NSS_BIND_SRV_UNPADDED_MOTION) uniform mediump texture2D r_unpadded_motion;
 half2 LoadUnpaddedMotion(float2 uv)
@@ -487,14 +486,6 @@ layout(set = 0, binding = NSS_BIND_UAV_PADDED_MOTION, rg16f) uniform mediump ima
 void StorePaddedMotion(int32_t2 coord, half2 motion)
 {
     imageStore(rw_input_motion_vectors, coord, half4(motion, 0.0HF, 1.0HF));
-}
-#endif
-
-#if defined(NSS_BIND_UAV_PADDED_DEPTH_TM1)
-layout(set = 0, binding = NSS_BIND_UAV_PADDED_DEPTH_TM1, r32f) uniform mediump image2D rw_prev_depth;
-void StorePaddedDepthTm1(int32_t2 coord, float depth)
-{
-    imageStore(rw_prev_depth, coord, float4(depth, 0.0f, 0.0f, 1.0f));
 }
 #endif
 
@@ -656,7 +647,7 @@ int32_t2 LoadDepthNearestDepthOffsetTm1(int32_t2 pixel)
     int32_t code    = int32_t(encNorm * 255.0 + 0.5);
 
     // 3. map back to {-1,0,1}²
-    return DecodeNearestDepthCoord(code);
+    return DecodeNearestDepthCoord(code) * int32_t(NotHistoryReset());
 }
 
 #endif
@@ -700,7 +691,7 @@ layout(set = 0, binding = NSS_BIND_SRV_LUMA_DERIV_TM1) uniform lowp texture2D r_
 
 half2 WarpLumaDerivative(float2 uv)
 {
-    return half2(textureLod(_LumaDerivTm1Tex, uv, 0).rg);
+    return half2(textureLod(_LumaDerivTm1Tex, uv, 0).rg) * NotHistoryReset();
 }
 
 half2 CalculateLumaDerivative(float2 reproj_uv, half3 jittered_colour, half disocclusion_mask)
@@ -769,12 +760,14 @@ layout(set = 0, binding = NSS_BIND_SRV_INPUT_DEPTH_TM1) uniform highp texture2D 
 
 FfxFloat32 LoadPrevDepth(int32_t2 iPxPos)
 {
-    return texelFetch(r_prev_depth, iPxPos, 0).r;
+    // NotHistoryReset() can only return 0.0 or 1.0.
+    return lerp(half(MAX_DEPTH), half(texelFetch(r_prev_depth, iPxPos, 0).r), NotHistoryReset());
 }
 
 FfxFloat32 SamplePrevDepth(FfxFloat32x2 fUV)
 {
-    return textureLod(sampler2D(r_prev_depth, s_LinearClamp), fUV, 0.0).r;
+    // NotHistoryReset() can only return 0.0 or 1.0.
+    return lerp(half(MAX_DEPTH), half(textureLod(sampler2D(r_prev_depth, s_LinearClamp), fUV, 0.0).r), NotHistoryReset());
 }
 
 // declaration
@@ -784,7 +777,8 @@ void GatherReconstructedPreviousDepthRQuad(float2 fUV, inout float4 depthQuad)
 {
     int32_t2 offset    = LoadDepthNearestDepthOffsetTm1(int32_t2(fUV * InputDims()));
     float2   offset_uv = float2(offset) * InvInputDims();
-    depthQuad          = textureGather(_DepthTm1Tex, fUV + offset_uv, 0).wzxy;
+    // NotHistoryReset() can only return 0.0 or 1.0.
+    depthQuad = lerp(float4(MAX_DEPTH), float4(textureGather(_DepthTm1Tex, fUV + offset_uv, 0).wzxy), float4(NotHistoryReset()));
 }
 
 FfxFloat32x2 ComputeNdc(FfxFloat32x2 fPxPos, int32_t2 iSize)
@@ -1329,7 +1323,7 @@ half3 LoadWarpedHistory(float2 uv, int32_t2 input_pixel, out half onscreen)
     motion *= half(dot(motion_pix, motion_pix) > MotionThresh());
 
     // UV coordinates in previous frame to resample history
-    float2 reproj_uv = uv - float2(motion);
+    float2 reproj_uv = uv + float2(motion);
 
     // Mask to flag whether the motion vector is resampling from valid location onscreen
     onscreen = half(all(greaterThanEqual(reproj_uv, float2(0.0))) && all(lessThan(reproj_uv, float2(1.0))));
@@ -1353,19 +1347,7 @@ half3 LoadWarpedHistory(float2 uv, int32_t2 input_pixel, out half onscreen)
 //-------------------------------------------------------------------------
 // Output: Upscaled‑output (RWTexture2D UAV)
 //-------------------------------------------------------------------------
-#if defined(NSS_BIND_UAV_UPSCALED_OUTPUT)
-layout(set = 0, binding = NSS_BIND_UAV_UPSCALED_OUTPUT, OUTPUT_IMG_FORMAT) uniform mediump image2D rw_upscaled_output;
-
-half4 LoadUpscaledOutput(int32_t2 iPxPos)
-{
-    return half4(imageLoad(rw_upscaled_output, iPxPos));
-}
-
-void StoreUpscaledOutput(int32_t2 iPxPos, FfxFloat32x4 v)
-{
-    imageStore(rw_upscaled_output, iPxPos, v);
-}
-
+// #define SIMULATE_R11G11B10_BEFORE_WRITE 1
 half3 SimulateR11G11B10Precision(half3 rgb)
 {
     const float   epsilon  = 1e-12;
@@ -1406,7 +1388,20 @@ half3 SimulateR11G11B10Precision(half3 rgb)
 
     return half3(r_out, g_out, b_out);
 }
-// #define SIMULATE_R11G11B10_BEFORE_WRITE 1
+
+#if defined(NSS_BIND_UAV_UPSCALED_OUTPUT)
+layout(set = 0, binding = NSS_BIND_UAV_UPSCALED_OUTPUT, OUTPUT_IMG_FORMAT) uniform mediump image2D rw_upscaled_output;
+
+half4 LoadUpscaledOutput(int32_t2 iPxPos)
+{
+    return half4(imageLoad(rw_upscaled_output, iPxPos));
+}
+
+void StoreUpscaledOutput(int32_t2 iPxPos, FfxFloat32x4 v)
+{
+    imageStore(rw_upscaled_output, iPxPos, v);
+}
+
 void WriteUpsampledColour(int32_t2 pixel, half3 colour)
 {
     half3 to_write = SafeColour(colour);
@@ -1419,25 +1414,43 @@ void WriteUpsampledColour(int32_t2 pixel, half3 colour)
 
 #endif  // #if defined(NSS_BIND_UAV_UPSCALED_OUTPUT)
 
+#if defined(NSS_BIND_UAV_UNPADDED_OUTPUT)
+layout(set = 0, binding = NSS_BIND_UAV_UNPADDED_OUTPUT, OUTPUT_IMG_FORMAT) uniform mediump image2D rw_unpadded_output;
+void WriteUnpaddedOutput(int32_t2 pixel, half3 colour)
+{
+    if (any(greaterThanEqual(pixel, UnpaddedOutputDims())))
+    {
+        return;
+    }
+
+    half3 to_write = SafeColour(colour);
+#ifdef SIMULATE_R11G11B10_BEFORE_WRITE
+    to_write = SimulateR11G11B10Precision(to_write);
+#endif
+    // Write with alpha = 1.0
+    imageStore(rw_unpadded_output, pixel, half4(to_write, 1.0));
+}
+#endif
+
 //-------------------------------------------------------------------------
 // Debug views (RWTexture2D UAV)
 //-------------------------------------------------------------------------
 #if defined(NSS_BIND_UAV_DEBUG_VIEWS)
-layout(set = 0, binding = NSS_BIND_UAV_DEBUG_VIEWS, OUTPUT_IMG_FORMAT) uniform mediump image2D rw_debug_views;
+layout(set = 0, binding = NSS_BIND_UAV_DEBUG_VIEWS, OUTPUT_IMG_FORMAT) uniform mediump image2D rw_unpadded_output;
 
 float4 LoadDebugView(int32_t2 iPxPos)
 {
-    return imageLoad(rw_debug_views, iPxPos);
+    return imageLoad(rw_unpadded_output, iPxPos);
 }
 
 void StoreDebugView(int32_t2 iPxPos, float4 v)
 {
-    imageStore(rw_debug_views, iPxPos, v);
+    imageStore(rw_unpadded_output, iPxPos, v);
 }
 
 float2 GetDebugViewDimensions()
 {
-    return imageSize(rw_debug_views);
+    return imageSize(rw_unpadded_output);
 }
 #endif  // #if defined(NSS_BIND_UAV_DEBUG_VIEWS)
 

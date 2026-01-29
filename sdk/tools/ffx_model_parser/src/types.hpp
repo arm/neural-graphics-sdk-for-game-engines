@@ -43,10 +43,10 @@ namespace arm
     /// the provided data are packed in a linear manner
     struct TensorInfo
     {
-        std::vector<uint64_t> shape;
-        VkFormat              format;
-        bool                  isAliased{false};
-        int64_t               sparsityDimension;
+        std::vector<int64_t> shape;
+        VkFormat             format;
+        bool                 isAliased{false};
+        int64_t              sparsityDimension;
     };
 
     struct ConstantsInfo
@@ -74,16 +74,18 @@ namespace arm
     struct ResourceInfo
     {
         ResourceInfo() = default;
-        ResourceInfo(std::string name, int set, int id, int format, mlsdk_decoder_tensor_dimensions dims)
-            : name(name)
+        ResourceInfo(std::string name, mlsdk_decoder_mrt_category category, int set, int id, int format, mlsdk_decoder_tensor_dimensions dims)
+            : name(std::move(name))
+            , category(category)
             , set(set)
             , id(id)
             , format(format)
-            , dims(dims)
+            , dims(std::move(dims))
         {
         }
 
         std::string                     name;
+        mlsdk_decoder_mrt_category      category;
         int                             set;
         int                             id;
         int                             format;

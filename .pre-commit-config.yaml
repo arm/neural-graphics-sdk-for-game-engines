@@ -12,7 +12,8 @@ exclude: |
     sdk/include/vulkan-headers/.*|
     sdk/libs/.*|
     sdk/tools/ffx_model_parser/libs/.*|
-    sdk/tools/ffx_shader_compiler/libs/.*
+    sdk/tools/ffx_shader_compiler/libs/.*|
+    samples/.*
     )$
 repos:
     # global hooks

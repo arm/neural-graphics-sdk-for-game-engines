@@ -59,12 +59,12 @@ static FfxShaderBlob nssGetMirrorPaddingPassPermutationBlobByIndex(uint32_t perm
     if (is16bit)
     {
         const int32_t tableIndex = g_ffx_nss_mirror_padding_16bit_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_mirror_padding_16bit_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_mirror_padding_16bit_PermutationInfo, tableIndex);
     }
     else
     {
         const int32_t tableIndex = g_ffx_nss_mirror_padding_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_mirror_padding_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_mirror_padding_PermutationInfo, tableIndex);
     }
 }
 
@@ -77,12 +77,12 @@ static FfxShaderBlob nssGetPreprocessPassPermutationBlobByIndex(uint32_t permuta
     if (is16bit)
     {
         const int32_t tableIndex = g_ffx_nss_pre_process_16bit_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_pre_process_16bit_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_pre_process_16bit_PermutationInfo, tableIndex);
     }
     else
     {
         const int32_t tableIndex = g_ffx_nss_pre_process_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_pre_process_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_pre_process_PermutationInfo, tableIndex);
     }
 }
 
@@ -116,12 +116,12 @@ static FfxShaderBlob nssGetPostprocessPassPermutationBlobByIndex(uint32_t permut
     if (is16bit)
     {
         const int32_t tableIndex = g_ffx_nss_post_process_16bit_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_post_process_16bit_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_post_process_16bit_PermutationInfo, tableIndex);
     }
     else
     {
         const int32_t tableIndex = g_ffx_nss_post_process_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_post_process_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_post_process_PermutationInfo, tableIndex);
     }
 }
 
@@ -155,12 +155,12 @@ static FfxShaderBlob nssGetDebugViewPassPermutationBlobByIndex(uint32_t permutat
     if (is16bit)
     {
         const int32_t tableIndex = g_ffx_nss_debug_view_16bit_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_debug_view_16bit_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_debug_view_16bit_PermutationInfo, tableIndex);
     }
     else
     {
         const int32_t tableIndex = g_ffx_nss_debug_view_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX_TENSOR(g_ffx_nss_debug_view_PermutationInfo, tableIndex);
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_nss_debug_view_PermutationInfo, tableIndex);
     }
 }
 

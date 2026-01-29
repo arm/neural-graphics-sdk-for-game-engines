@@ -44,7 +44,10 @@
 #include <cwchar>  // for mbstowcs, wcstombs
 #include <map>
 #include <memory>
-#include <spirv-tools/libspirv.h>
+#include <vector>
+// For graph shape inference
+#include "spirv-tools/libspirv.hpp"
+#include "spirv/unified1/spirv.hpp11"
 
 // Solution from mozilla:
 //     https://hg-edge.mozilla.org/try/diff/73f0522fdf9cb081fe9f859df3727165848c46cd/gfx/src/X11UndefineNone.h
@@ -64,9 +67,6 @@
 #ifdef Success
 #undef Success
 #endif
-
-#include <spirv-tools/spirv.hpp11>
-#include <vector>
 
 namespace
 {
@@ -109,14 +109,26 @@ namespace
     DescriptorSetBindingToShapeMap GetInputShapes(const FfxDataGraphBlob& dataGraphBlob, const uint32_t width, const uint32_t height)
     {
         DescriptorSetBindingToShapeMap inputShapes{};
-        for (FfxUInt32 i = 0; i < dataGraphBlob.tensorNums; ++i)
+        for (FfxUInt32 i = 0; i < dataGraphBlob.inputTensorNums; ++i)
         {
-            // For now we only support tensor shape with rank 4
-            // The shape[0] is hardcoded to 1, shape[1..2] are decided by render size
-            // and the shape[3] is queried from the data graph blob
-            FFX_ASSERT(4 == dataGraphBlob.tensorDimSize[i]);
-            auto currentTensorDimension = std::vector<int64_t>{1, height, width, static_cast<int64_t>(dataGraphBlob.tensorDims[i][3])};
-            auto binding                = std::make_pair(0u, dataGraphBlob.tensorBindings[i]);  // [set, binding]
+            const auto           dimSize = dataGraphBlob.inputTensorDimSize[i];
+            std::vector<int64_t> currentTensorDimension{};
+            currentTensorDimension.push_back(1);  // Batch size is always 1
+            bool is_width = false;
+            for (FfxUInt32 j = 1; j < dimSize; ++j)
+            {
+                // If a invalid size is found, it's not static graph.
+                auto curSize = dataGraphBlob.inputTensorDims[i][j];
+
+                if (curSize <= 0)
+                {
+                    // Replace the unknown size with resolution.
+                    curSize  = is_width ? width : height;
+                    is_width = true;
+                }
+                currentTensorDimension.push_back(curSize);
+            }
+            const std::pair<uint32_t, uint32_t> binding{0, dataGraphBlob.inputTensorBindings[i]};  // [set, binding]
             inputShapes.emplace(binding, std::move(currentTensorDimension));
         }
         return inputShapes;
@@ -354,7 +366,11 @@ typedef struct BackendContext_VK
 #endif
         union
         {
-            VkImage  imageResource;
+            struct
+            {
+                VkImage  imageResource;
+                VkBuffer aliasedBufferResource;
+            };
             VkBuffer bufferResource;
             struct
             {
@@ -493,18 +509,19 @@ typedef struct BackendContext_VK
         PFN_vkCmdEndDebugUtilsLabelEXT   vkCmdEndDebugUtilsLabelEXT   = 0;
 
         // ARM
-        PFN_vkCreateTensorARM                                  vkCreateTensorARM                                  = 0;
-        PFN_vkCreateTensorViewARM                              vkCreateTensorViewARM                              = 0;
-        PFN_vkGetTensorMemoryRequirementsARM                   vkGetTensorMemoryRequirementsARM                   = 0;
-        PFN_vkBindTensorMemoryARM                              vkBindTensorMemoryARM                              = 0;
-        PFN_vkCreateDataGraphPipelinesARM                      vkCreateDataGraphPipelinesARM                      = 0;
-        PFN_vkCreateDataGraphPipelineSessionARM                vkCreateDataGraphPipelineSessionARM                = 0;
-        PFN_vkCmdDispatchDataGraphARM                          vkCmdDispatchDataGraphARM                          = 0;
-        PFN_vkGetDataGraphPipelineSessionMemoryRequirementsARM vkGetDataGraphPipelineSessionMemoryRequirementsARM = 0;
-        PFN_vkBindDataGraphPipelineSessionMemoryARM            vkBindDataGraphPipelineSessionMemoryARM            = 0;
-        PFN_vkDestroyDataGraphPipelineSessionARM               vkDestroyDataGraphPipelineSessionARM               = 0;
-        PFN_vkDestroyTensorARM                                 vkDestroyTensorARM                                 = 0;
-        PFN_vkDestroyTensorViewARM                             vkDestroyTensorViewARM                             = 0;
+        PFN_vkCreateTensorARM                                     vkCreateTensorARM                                     = 0;
+        PFN_vkCreateTensorViewARM                                 vkCreateTensorViewARM                                 = 0;
+        PFN_vkGetTensorMemoryRequirementsARM                      vkGetTensorMemoryRequirementsARM                      = 0;
+        PFN_vkBindTensorMemoryARM                                 vkBindTensorMemoryARM                                 = 0;
+        PFN_vkCreateDataGraphPipelinesARM                         vkCreateDataGraphPipelinesARM                         = 0;
+        PFN_vkCreateDataGraphPipelineSessionARM                   vkCreateDataGraphPipelineSessionARM                   = 0;
+        PFN_vkCmdDispatchDataGraphARM                             vkCmdDispatchDataGraphARM                             = 0;
+        PFN_vkGetDataGraphPipelineSessionBindPointRequirementsARM vkGetDataGraphPipelineSessionBindPointRequirementsARM = 0;
+        PFN_vkGetDataGraphPipelineSessionMemoryRequirementsARM    vkGetDataGraphPipelineSessionMemoryRequirementsARM    = 0;
+        PFN_vkBindDataGraphPipelineSessionMemoryARM               vkBindDataGraphPipelineSessionMemoryARM               = 0;
+        PFN_vkDestroyDataGraphPipelineSessionARM                  vkDestroyDataGraphPipelineSessionARM                  = 0;
+        PFN_vkDestroyTensorARM                                    vkDestroyTensorARM                                    = 0;
+        PFN_vkDestroyTensorViewARM                                vkDestroyTensorViewARM                                = 0;
         // ~ARM
 
     } VkFunctionTable;
@@ -830,6 +847,7 @@ bool ffxIsSurfaceFormatSRGB(FfxSurfaceFormat fmt)
     case (FFX_SURFACE_FORMAT_R8_SINT):
     case (FFX_SURFACE_FORMAT_R8G8_UNORM):
     case (FFX_SURFACE_FORMAT_R8G8_UINT):
+    case (FFX_SURFACE_FORMAT_R8G8_SINT):
     case (FFX_SURFACE_FORMAT_R32_FLOAT):
     case (FFX_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP):
     case (FFX_SURFACE_FORMAT_UNKNOWN):
@@ -863,6 +881,22 @@ FfxSurfaceFormat ffxGetSurfaceFormatToGamma(FfxSurfaceFormat fmt)
         return FFX_SURFACE_FORMAT_B8G8R8A8_SRGB;
     default:
         return fmt;
+    }
+}
+
+uint8_t ffxGetBytesPerElementFromSurfaceFormat(FfxSurfaceFormat fmt)
+{
+    switch (fmt)
+    {
+    case (FFX_SURFACE_FORMAT_R16G16_FLOAT):
+        return 4;
+    case (FFX_SURFACE_FORMAT_R16_UINT):
+        return 2;
+    case (FFX_SURFACE_FORMAT_R8_UNORM):
+        return 1;
+    // do not care about this number for other formats
+    default:
+        return 1;
     }
 }
 
@@ -930,6 +964,8 @@ VkFormat ffxGetVkFormatFromSurfaceFormat(FfxSurfaceFormat fmt)
         return VK_FORMAT_R8G8_UNORM;
     case (FFX_SURFACE_FORMAT_R8G8_UINT):
         return VK_FORMAT_R8G8_UINT;
+    case (FFX_SURFACE_FORMAT_R8G8_SINT):
+        return VK_FORMAT_R8G8_SINT;
     case (FFX_SURFACE_FORMAT_R32_FLOAT):
         return VK_FORMAT_R32_SFLOAT;
     case (FFX_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP):
@@ -1001,6 +1037,8 @@ VkFormat ffxGetVKUAVFormatFromSurfaceFormat(FfxSurfaceFormat fmt)
         return VK_FORMAT_R8G8_UNORM;
     case (FFX_SURFACE_FORMAT_R8G8_UINT):
         return VK_FORMAT_R8G8_UINT;
+    case (FFX_SURFACE_FORMAT_R8G8_SINT):
+        return VK_FORMAT_R8G8_SINT;
     case (FFX_SURFACE_FORMAT_R32_FLOAT):
         return VK_FORMAT_R32_SFLOAT;
     case (FFX_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP):
@@ -1069,6 +1107,8 @@ FfxSurfaceFormat ffxGetSurfaceFormatVK(VkFormat fmt)
         return FFX_SURFACE_FORMAT_R8G8_UNORM;
     case VK_FORMAT_R8G8_UINT:
         return FFX_SURFACE_FORMAT_R8G8_UINT;
+    case VK_FORMAT_R8G8_SINT:
+        return FFX_SURFACE_FORMAT_R8G8_SINT;
     case VK_FORMAT_R32_SFLOAT:
     case VK_FORMAT_D32_SFLOAT:
     case VK_FORMAT_D32_SFLOAT_S8_UINT:
@@ -1418,6 +1458,8 @@ VkAccessFlags2 getVKAccessFlagsFromResourceState(FfxResourceStates state)
         return VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM;
     case FFX_RESOURCE_STATE_DATA_GRAPH_WRITE:
         return VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM;
+    case FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT:
+        return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
     default:
         FFX_ASSERT_MESSAGE(false, "State flag not yet supported");
         return VK_ACCESS_2_SHADER_READ_BIT;
@@ -1449,6 +1491,8 @@ VkPipelineStageFlags2 getVKPipelineStageFlagsFromResourceState(FfxResourceStates
     case FFX_RESOURCE_STATE_DATA_GRAPH_READ:
     case FFX_RESOURCE_STATE_DATA_GRAPH_WRITE:
         return VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+    case (FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT):
+        return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
     default:
         FFX_ASSERT_MESSAGE(false, "Pipeline stage flag not yet supported");
         return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -1480,6 +1524,8 @@ VkImageLayout getVKImageLayoutFromResourceState(FfxResourceStates state)
     case FFX_RESOURCE_STATE_DATA_GRAPH_READ:
     case FFX_RESOURCE_STATE_DATA_GRAPH_WRITE:
         return VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM;
+    case FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT:
+        return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     case FFX_RESOURCE_STATE_INDIRECT_ARGUMENT:
         // this case is for buffers
     default:
@@ -1599,10 +1645,9 @@ void addBarrier(BackendContext_VK* backendContext, FfxResourceInternal* resource
         VkBuffer                vkResource = ffxResource.bufferResource;
         VkBufferMemoryBarrier2* barrier    = &backendContext->bufferMemoryBarriers[backendContext->scheduledBufferBarrierCount];
 
-        barrier->sType        = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier->pNext        = nullptr;
-        barrier->srcStageMask = getVKPipelineStageFlagsFromResourceState(curState);
-        ;
+        barrier->sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        barrier->pNext               = nullptr;
+        barrier->srcStageMask        = getVKPipelineStageFlagsFromResourceState(curState);
         barrier->srcAccessMask       = getVKAccessFlagsFromResourceState(curState);
         barrier->dstStageMask        = getVKPipelineStageFlagsFromResourceState(newState);
         barrier->dstAccessMask       = getVKAccessFlagsFromResourceState(newState);
@@ -1620,10 +1665,9 @@ void addBarrier(BackendContext_VK* backendContext, FfxResourceInternal* resource
         VkTensorARM               vkResource = ffxResource.tensorResource;
         VkTensorMemoryBarrierARM* barrier    = &backendContext->tensorMemoryBarriers[backendContext->scheduledTensorBarrierCount];
 
-        barrier->sType        = VK_STRUCTURE_TYPE_TENSOR_MEMORY_BARRIER_ARM;
-        barrier->pNext        = nullptr;
-        barrier->srcStageMask = getVKPipelineStageFlagsFromResourceState(curState);
-        ;
+        barrier->sType               = VK_STRUCTURE_TYPE_TENSOR_MEMORY_BARRIER_ARM;
+        barrier->pNext               = nullptr;
+        barrier->srcStageMask        = getVKPipelineStageFlagsFromResourceState(curState);
         barrier->srcAccessMask       = getVKAccessFlagsFromResourceState(curState);
         barrier->dstStageMask        = getVKPipelineStageFlagsFromResourceState(newState);
         barrier->dstAccessMask       = getVKAccessFlagsFromResourceState(newState);
@@ -1667,10 +1711,8 @@ void addBarrier(BackendContext_VK* backendContext, FfxResourceInternal* resource
     }
     else
     {
-        VkImage vkResource =
-            ffxResource.resourceDescription.type == FFX_RESOURCE_TYPE_TENSOR ? ffxResource.aliasedTensorImageResource : ffxResource.imageResource;
-
-        VkImageMemoryBarrier2* barrier = &backendContext->imageMemoryBarriers[backendContext->scheduledImageBarrierCount];
+        VkImage                vkResource = ffxResource.imageResource;
+        VkImageMemoryBarrier2* barrier    = &backendContext->imageMemoryBarriers[backendContext->scheduledImageBarrierCount];
 
         VkImageSubresourceRange range;
         range.aspectMask     = getImageAspect(ffxResource.resourceDescription.usage);
@@ -1679,10 +1721,9 @@ void addBarrier(BackendContext_VK* backendContext, FfxResourceInternal* resource
         range.baseArrayLayer = 0;
         range.layerCount     = VK_REMAINING_ARRAY_LAYERS;
 
-        barrier->sType        = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier->pNext        = nullptr;
-        barrier->srcStageMask = getVKPipelineStageFlagsFromResourceState(curState);
-        ;
+        barrier->sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier->pNext               = nullptr;
+        barrier->srcStageMask        = getVKPipelineStageFlagsFromResourceState(curState);
         barrier->srcAccessMask       = getVKAccessFlagsFromResourceState(curState);
         barrier->dstStageMask        = getVKPipelineStageFlagsFromResourceState(newState);
         barrier->dstAccessMask       = getVKAccessFlagsFromResourceState(newState);
@@ -1694,6 +1735,26 @@ void addBarrier(BackendContext_VK* backendContext, FfxResourceInternal* resource
         barrier->subresourceRange    = range;
 
         ++backendContext->scheduledImageBarrierCount;
+
+        if (ffxResource.aliasedBufferResource != VK_NULL_HANDLE)
+        {
+            VkBuffer                vkResource = ffxResource.aliasedBufferResource;
+            VkBufferMemoryBarrier2* barrier    = &backendContext->bufferMemoryBarriers[backendContext->scheduledBufferBarrierCount];
+
+            barrier->sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            barrier->pNext               = nullptr;
+            barrier->srcStageMask        = getVKPipelineStageFlagsFromResourceState(curState);
+            barrier->srcAccessMask       = getVKAccessFlagsFromResourceState(curState);
+            barrier->dstStageMask        = getVKPipelineStageFlagsFromResourceState(newState);
+            barrier->dstAccessMask       = getVKAccessFlagsFromResourceState(newState);
+            barrier->srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier->dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier->buffer              = vkResource;
+            barrier->offset              = 0;
+            barrier->size                = VK_WHOLE_SIZE;
+
+            ++backendContext->scheduledBufferBarrierCount;
+        }
     }
 
     curState = newState;
@@ -2028,6 +2089,7 @@ static bool LoadVulkanFunctions(VkDeviceContext* vkDeviceContext, BackendContext
         loader.getDeviceProc(tb.vkCreateDataGraphPipelinesARM, "vkCreateDataGraphPipelinesARM");
         loader.getDeviceProc(tb.vkCreateDataGraphPipelineSessionARM, "vkCreateDataGraphPipelineSessionARM");
         loader.getDeviceProc(tb.vkCmdDispatchDataGraphARM, "vkCmdDispatchDataGraphARM");
+        loader.getDeviceProc(tb.vkGetDataGraphPipelineSessionBindPointRequirementsARM, "vkGetDataGraphPipelineSessionBindPointRequirementsARM");
         loader.getDeviceProc(tb.vkGetDataGraphPipelineSessionMemoryRequirementsARM, "vkGetDataGraphPipelineSessionMemoryRequirementsARM");
         loader.getDeviceProc(tb.vkBindDataGraphPipelineSessionMemoryARM, "vkBindDataGraphPipelineSessionMemoryARM");
         loader.getDeviceProc(tb.vkDestroyDataGraphPipelineSessionARM, "vkDestroyDataGraphPipelineSessionARM");
@@ -2720,6 +2782,16 @@ FfxErrorCode DestroyBackendContextVK(FfxInterface* backendInterface, FfxUInt32 e
         backendContext->vkFunctionTable.vkDestroyDescriptorPool(backendContext->device, backendContext->descriptorPool, VK_NULL_HANDLE);
         backendContext->descriptorPool = VK_NULL_HANDLE;
 
+        // DATA GRAPH: transient session VkDeviceMemory is stored on BackendContext_VK (not per FfxPipelineState).
+        // Allocate/bind happens in CreateDataGraphPipelineVK, so free on final backend teardown (refCount == 0)
+        // to avoid double-free / ordering hazards across multiple effect contexts.
+        if (backendContext->dataGraphPipelineSessionResource.deviceMemory != VK_NULL_HANDLE)
+        {
+            backendContext->vkFunctionTable.vkFreeMemory(backendContext->device, backendContext->dataGraphPipelineSessionResource.deviceMemory, nullptr);
+            backendContext->dataGraphPipelineSessionResource.deviceMemory   = VK_NULL_HANDLE;
+            backendContext->dataGraphPipelineSessionResource.allocationSize = 0;
+        }
+
         // clean up dynamic uniform buffer & memory
         backendContext->vkFunctionTable.vkUnmapMemory(backendContext->device, backendContext->uniformBufferMemory);
         backendContext->vkFunctionTable.vkFreeMemory(backendContext->device, backendContext->uniformBufferMemory, VK_NULL_HANDLE);
@@ -2777,6 +2849,7 @@ FfxErrorCode CreateTensorResourceVK(FfxInterface*                       backendI
     FfxResourceDescription resourceDesc = createResourceDescription->resourceDescription;
     FFX_ASSERT(validateTensorSurfaceFormat(backendInterface, resourceDesc.format));
 
+    outResource->alignedWidth = createResourceDescription->resourceDescription.width;
     FFX_ASSERT(effectContext.nextStaticResource + 1 < effectContext.nextDynamicResource);
     outResource->internalIndex                   = effectContext.nextStaticResource++;
     BackendContext_VK::Resource* backendResource = &backendContext->pResources[outResource->internalIndex];
@@ -3149,6 +3222,8 @@ FfxErrorCode CreateResourceVK(FfxInterface*                       backendInterfa
 
     VkMemoryRequirements memRequirements = {};
 
+    const bool createAliasedBuffer = (resourceDesc.flags & FFX_RESOURCE_FLAGS_BUFFER_ALIASED) == FFX_RESOURCE_FLAGS_BUFFER_ALIASED;
+
     switch (createResourceDescription->resourceDescription.type)
     {
     case FFX_RESOURCE_TYPE_BUFFER:
@@ -3225,6 +3300,11 @@ FfxErrorCode CreateResourceVK(FfxInterface*                       backendInterfa
             return FFX_OK;
         }
 
+        // TODO ARM: This is rather janky, with the aligned width rework we should also figure this out.
+        // A buffer doesn't have a width - but when working in the CT OF component, buffers are aliasing images, so they actually do have a width.
+        // This width, however, is _not_ the buffer stride so it needs a different field, or image-buffer aliasing for all buffers whose width is used in the shaders.
+        outResource->alignedWidth = createResourceDescription->resourceDescription.stride;
+
         break;
     }
     case FFX_RESOURCE_TYPE_TEXTURE1D:
@@ -3248,7 +3328,7 @@ FfxErrorCode CreateResourceVK(FfxInterface*                       backendInterfa
                                     ? createResourceDescription->resourceDescription.depth
                                     : 1;
         imageInfo.format        = getVkFormatFromSurfaceFormatAndUsage(createResourceDescription->resourceDescription.format, resourceDesc.usage);
-        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.tiling        = createAliasedBuffer ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;  // GetImageSubresourceLayout requires linear tiling
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage         = getVKImageUsageFlagsFromResourceUsage(resourceDesc.usage);
         imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -3285,6 +3365,7 @@ FfxErrorCode CreateResourceVK(FfxInterface*                       backendInterfa
         {
             return FFX_ERROR_BACKEND_API_ERROR;
         }
+        outResource->alignedWidth = createResourceDescription->resourceDescription.width;
 
         break;
     }
@@ -3396,6 +3477,36 @@ FfxErrorCode CreateResourceVK(FfxInterface*                       backendInterfa
             }
 
             effectContext.nextStaticResourceView += uavResourceViewCount;
+        }
+
+        if (createAliasedBuffer)
+        {
+            // We need to be carefull about the case where width != stride
+            VkImageSubresource  subResource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
+            VkSubresourceLayout subResourceLayout;
+            backendContext->vkFunctionTable.vkGetImageSubresourceLayout(
+                backendContext->device, backendResource->imageResource, &subResource, &subResourceLayout);
+            outResource->alignedWidth =
+                subResourceLayout.rowPitch / ffxGetBytesPerElementFromSurfaceFormat(createResourceDescription->resourceDescription.format);
+
+            // Create Aliased Buffer which shares the same device memory as Image
+            VkBufferCreateInfo bufferInfo = {};
+            bufferInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferInfo.size               = subResourceLayout.size;
+            bufferInfo.usage              = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bufferInfo.sharingMode        = VK_SHARING_MODE_EXCLUSIVE;
+
+            if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendResource->aliasedBufferResource) !=
+                VK_SUCCESS)
+            {
+                return FFX_ERROR_BACKEND_API_ERROR;
+            }
+
+            if (backendContext->vkFunctionTable.vkBindBufferMemory(
+                    backendContext->device, backendResource->aliasedBufferResource, backendResource->deviceMemory, 0) != VK_SUCCESS)
+            {
+                return FFX_ERROR_BACKEND_API_ERROR;
+            }
         }
         break;
     }
@@ -3543,6 +3654,12 @@ FfxErrorCode DestroyResourceVK(FfxInterface* backendInterface, FfxResourceIntern
             {
                 backendContext->vkFunctionTable.vkDestroyImage(backendContext->device, backgroundResource.imageResource, nullptr);
                 backgroundResource.imageResource = VK_NULL_HANDLE;
+                // Destroy aliased buffer
+                if (backgroundResource.aliasedBufferResource != VK_NULL_HANDLE)
+                {
+                    backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, backgroundResource.aliasedBufferResource, nullptr);
+                    backgroundResource.aliasedBufferResource = VK_NULL_HANDLE;
+                }
             }
         }
 
@@ -4275,7 +4392,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface*                 backendInterface,
     // start by fetching the shader blob
     FfxShaderBlob shaderBlob = {};
     // WON'T WORK WITH FSR3!!
-    backendInterface->fpGetPermutationBlobByIndex(effect, pass, permutationOptions, &shaderBlob, nullptr, nullptr);
+    FFX_VALIDATE(backendInterface->fpGetPermutationBlobByIndex(effect, pass, permutationOptions, &shaderBlob, nullptr, nullptr));
     FFX_ASSERT(shaderBlob.data && shaderBlob.size);
 
     //////////////////////////////////////////////////////////////////////////
@@ -4289,20 +4406,33 @@ FfxErrorCode CreatePipelineVK(FfxInterface*                 backendInterface,
     const size_t samplerCount = pipelineDescription->samplerCount;
     for (uint32_t currentSamplerIndex = 0; currentSamplerIndex < samplerCount; ++currentSamplerIndex)
     {
-        VkSamplerCreateInfo createInfo     = {};
-        createInfo.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        createInfo.pNext                   = nullptr;
-        createInfo.flags                   = 0;
-        createInfo.minLod                  = 0.f;
-        createInfo.maxLod                  = VK_LOD_CLAMP_NONE;
-        createInfo.anisotropyEnable        = false;
-        createInfo.compareEnable           = false;
-        createInfo.compareOp               = VK_COMPARE_OP_NEVER;
-        createInfo.borderColor             = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
-        createInfo.unnormalizedCoordinates = VK_FALSE;
-        createInfo.addressModeU            = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeU);
-        createInfo.addressModeV            = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeV);
-        createInfo.addressModeW            = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeW);
+        VkSamplerCreateInfo createInfo = {};
+
+        if (shaderBlob.boundSamplers)
+        {
+            uint32_t bindingIndex              = shaderBlob.boundSamplers[currentSamplerIndex] % 10;
+            createInfo.maxLod                  = pipelineDescription->samplers[bindingIndex].unnormalizedCoordinates ? 0.f : VK_LOD_CLAMP_NONE;
+            createInfo.unnormalizedCoordinates = pipelineDescription->samplers[bindingIndex].unnormalizedCoordinates ? VK_TRUE : VK_FALSE;
+        }
+        else
+        {
+            createInfo.maxLod                  = VK_LOD_CLAMP_NONE;
+            createInfo.unnormalizedCoordinates = VK_FALSE;
+        }
+
+        createInfo.sType  = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        createInfo.pNext  = nullptr;
+        createInfo.flags  = 0;
+        createInfo.minLod = 0.f;
+
+        createInfo.anisotropyEnable = false;
+        createInfo.compareEnable    = false;
+        createInfo.compareOp        = VK_COMPARE_OP_NEVER;
+        createInfo.borderColor      = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+
+        createInfo.addressModeU = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeU);
+        createInfo.addressModeV = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeV);
+        createInfo.addressModeW = FfxGetAddressModeVK(pipelineDescription->samplers[currentSamplerIndex].addressModeW);
 
         // Set the right filter
         switch (pipelineDescription->samplers[currentSamplerIndex].filter)
@@ -4316,6 +4446,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface*                 backendInterface,
             createInfo.minFilter  = VK_FILTER_LINEAR;
             createInfo.magFilter  = VK_FILTER_LINEAR;
             createInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            createInfo.mipmapMode = createInfo.unnormalizedCoordinates ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
             break;
         case FFX_FILTER_TYPE_MINMAGLINEARMIP_POINT:
             createInfo.minFilter  = VK_FILTER_LINEAR;
@@ -4772,7 +4903,7 @@ FfxErrorCode CreateGraphicsPipelineVK(FfxInterface*                 backendInter
     FfxShaderBlob shaderBlob     = {};
     FfxShaderBlob vertShaderBlob = {};
 
-    backendInterface->fpGetPermutationBlobByIndex(effect, pass, permutationOptions, &shaderBlob, &vertShaderBlob, nullptr);
+    FFX_VALIDATE(backendInterface->fpGetPermutationBlobByIndex(effect, pass, permutationOptions, &shaderBlob, &vertShaderBlob, nullptr));
     FFX_ASSERT(shaderBlob.data && shaderBlob.size);
     FFX_ASSERT(vertShaderBlob.data && vertShaderBlob.size);
 
@@ -5620,7 +5751,7 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
 
     // start by fetching the shader blob
     FfxDataGraphBlob dataGraphBlob = {};
-    backendInterface->fpGetPermutationBlobByIndex(effect, passId, permutationOptions, nullptr, nullptr, &dataGraphBlob);
+    FFX_VALIDATE(backendInterface->fpGetPermutationBlobByIndex(effect, passId, permutationOptions, nullptr, nullptr, &dataGraphBlob));
 
     //////////////////////////////////////////////////////////////////////////
     // One root signature (or pipeline layout) per pipeline
@@ -5634,10 +5765,17 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
     // Support more when needed
     VkShaderStageFlags shaderStageFlags = VK_SHADER_STAGE_ALL;
 
-    // Tensors
-    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.tensorNums; ++tensorIndex)
+    // Input Tensors
+    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.inputTensorNums; ++tensorIndex)
     {
-        VkDescriptorSetLayoutBinding binding = {dataGraphBlob.tensorBindings[tensorIndex], VK_DESCRIPTOR_TYPE_TENSOR_ARM, 1, shaderStageFlags, nullptr};
+        VkDescriptorSetLayoutBinding binding = {dataGraphBlob.inputTensorBindings[tensorIndex], VK_DESCRIPTOR_TYPE_TENSOR_ARM, 1, shaderStageFlags, nullptr};
+        layoutBindings.emplace_back(binding);
+    }
+
+    // Output Tensors
+    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.outputTensorNums; ++tensorIndex)
+    {
+        VkDescriptorSetLayoutBinding binding = {dataGraphBlob.outputTensorBindings[tensorIndex], VK_DESCRIPTOR_TYPE_TENSOR_ARM, 1, shaderStageFlags, nullptr};
         layoutBindings.emplace_back(binding);
     }
 
@@ -5692,16 +5830,22 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
 
     outPipeline->cmdSignature = nullptr;
 
-    outPipeline->uavTensorCount = dataGraphBlob.tensorNums;
-
+    outPipeline->uavTensorCount = dataGraphBlob.outputTensorNums;
     FFX_ASSERT(outPipeline->uavTensorCount < FFX_MAX_NUM_TENSORS);
-
-    // For now, we flag all tensors as UAVs, since we don't have reflection information if they are SRV or UAV.
-    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.tensorNums; ++tensorIndex)
+    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.outputTensorNums; ++tensorIndex)
     {
-        outPipeline->uavTensorBindings[tensorIndex].slotIndex  = dataGraphBlob.tensorBindings[tensorIndex];
+        outPipeline->uavTensorBindings[tensorIndex].slotIndex  = dataGraphBlob.outputTensorBindings[tensorIndex];
         outPipeline->uavTensorBindings[tensorIndex].arrayIndex = 0;
-        ConvertUTF8ToUTF16(dataGraphBlob.tensorNames[tensorIndex], outPipeline->uavTensorBindings[tensorIndex].name, FFX_RESOURCE_NAME_SIZE);
+        ConvertUTF8ToUTF16(dataGraphBlob.outputTensorNames[tensorIndex], outPipeline->uavTensorBindings[tensorIndex].name, FFX_RESOURCE_NAME_SIZE);
+    }
+
+    outPipeline->srvTensorCount = dataGraphBlob.inputTensorNums;
+    FFX_ASSERT(outPipeline->srvTensorCount < FFX_MAX_NUM_TENSORS);
+    for (uint32_t tensorIndex = 0; tensorIndex < dataGraphBlob.inputTensorNums; ++tensorIndex)
+    {
+        outPipeline->srvTensorBindings[tensorIndex].slotIndex  = dataGraphBlob.inputTensorBindings[tensorIndex];
+        outPipeline->srvTensorBindings[tensorIndex].arrayIndex = 0;
+        ConvertUTF8ToUTF16(dataGraphBlob.inputTensorNames[tensorIndex], outPipeline->srvTensorBindings[tensorIndex].name, FFX_RESOURCE_NAME_SIZE);
     }
 
     DescriptorSetBindingToShapeMap inputShapes = GetInputShapes(dataGraphBlob, render_width, render_height);
@@ -5764,14 +5908,15 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
     std::vector<VkTensorDescriptionARM>             tensorDescs;
     std::vector<VkDataGraphPipelineResourceInfoARM> resourceInfos;
 
-    tensorDescs.resize(dataGraphBlob.tensorNums);
-    for (FfxUInt32 tensorIndex = 0; tensorIndex < dataGraphBlob.tensorNums; ++tensorIndex)
+    tensorDescs.resize(dataGraphBlob.inputTensorNums + dataGraphBlob.outputTensorNums);
+
+    for (FfxUInt32 tensorIndex = 0; tensorIndex < dataGraphBlob.inputTensorNums; ++tensorIndex)
     {
-        std::pair<uint32_t, uint32_t> binding{0, dataGraphBlob.tensorBindings[tensorIndex]};  // [set, binding]
+        std::pair<uint32_t, uint32_t> binding{0, dataGraphBlob.inputTensorBindings[tensorIndex]};  // [set, binding]
         VkTensorDescriptionARM        tensorDescription = {VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
                                                     nullptr,
                                                     VK_TENSOR_TILING_OPTIMAL_ARM,
-                                                    (VkFormat)dataGraphBlob.tensorFormats[tensorIndex],
+                                                    (VkFormat)dataGraphBlob.inputTensorFormats[tensorIndex],
                                                     static_cast<uint32_t>(ShapeInferenceResults.OutputShapes[binding].size()),
                                                     ShapeInferenceResults.OutputShapes[binding].data(),
                                                     nullptr,  // pStrides
@@ -5782,6 +5927,32 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
         VkDataGraphPipelineResourceInfoARM resourceInfo = {
             VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_RESOURCE_INFO_ARM,
             &tensorDescs[tensorIndex],
+            binding.first,   // descriptorSet
+            binding.second,  // binding
+            0                // array element
+        };
+
+        resourceInfos.push_back(resourceInfo);
+    }
+
+    // output tensors infos
+    for (FfxUInt32 tensorIndex = 0; tensorIndex < dataGraphBlob.outputTensorNums; ++tensorIndex)
+    {
+        std::pair<uint32_t, uint32_t> binding{0, dataGraphBlob.outputTensorBindings[tensorIndex]};  // [set, binding]
+        VkTensorDescriptionARM        tensorDescription = {VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+                                                    nullptr,
+                                                    VK_TENSOR_TILING_OPTIMAL_ARM,
+                                                    (VkFormat)dataGraphBlob.outputTensorFormats[tensorIndex],
+                                                    static_cast<uint32_t>(ShapeInferenceResults.OutputShapes[binding].size()),
+                                                    ShapeInferenceResults.OutputShapes[binding].data(),
+                                                    nullptr,  // pStrides
+                                                    VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM};
+
+        tensorDescs[tensorIndex + dataGraphBlob.inputTensorNums] = tensorDescription;
+
+        VkDataGraphPipelineResourceInfoARM resourceInfo = {
+            VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_RESOURCE_INFO_ARM,
+            &tensorDescs[tensorIndex + dataGraphBlob.inputTensorNums],
             binding.first,   // descriptorSet
             binding.second,  // binding
             0                // array element
@@ -5813,6 +5984,9 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
     // set the pipeline
     outPipeline->pipeline = reinterpret_cast<FfxPipeline>(dataGraphPipeline);
 
+    // Setup the pipeline name
+    wcscpy_s(outPipeline->name, desc->name);
+
     const VkDataGraphPipelineSessionCreateInfoARM sessionCreateInfo = {
         VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_CREATE_INFO_ARM, nullptr, 0, dataGraphPipeline};
 
@@ -5825,12 +5999,42 @@ FfxErrorCode CreateDataGraphPipelineVK(FfxInterface*                 backendInte
     // Use cpp standard way (eg.reinterpret_cast) to store opaque vulkan handles in generic pointers
     outPipeline->session = reinterpret_cast<FfxDataGraphPipelineSession>(session);
 
-    const VkDataGraphPipelineSessionMemoryRequirementsInfoARM memoryRequirementsInfo = {
-        VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_MEMORY_REQUIREMENTS_INFO_ARM, nullptr, session, VK_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_TRANSIENT_ARM};
+    // Query the number of bind points to which memory must be bound
+    uint32_t                                               numRequiredBindPoints = 0;
+    VkDataGraphPipelineSessionBindPointRequirementsInfoARM bindPointReqsInfo     = {
+        VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENTS_INFO_ARM, nullptr, session};
+
+    if (backendContext->vkFunctionTable.vkGetDataGraphPipelineSessionBindPointRequirementsARM(
+            backendContext->device, &bindPointReqsInfo, &numRequiredBindPoints, nullptr))
+    {
+        return FFX_ERROR_BACKEND_API_ERROR;
+    }
+
+    // Query the list of bind points to which memory must be bound
+    std::vector<VkDataGraphPipelineSessionBindPointRequirementARM> bindPointRequirements(
+        numRequiredBindPoints, VkDataGraphPipelineSessionBindPointRequirementARM{VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENT_ARM});
+    if (backendContext->vkFunctionTable.vkGetDataGraphPipelineSessionBindPointRequirementsARM(
+            backendContext->device, &bindPointReqsInfo, &numRequiredBindPoints, bindPointRequirements.data()))
+    {
+        return FFX_ERROR_BACKEND_API_ERROR;
+    }
+
+    FFX_ASSERT(numRequiredBindPoints >= 1);  // Transient bind point is required
 
     VkMemoryRequirements2 memreqs = {VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, nullptr, {}};
+    for (uint32_t i = 0; i < numRequiredBindPoints; ++i)
+    {
+        if (bindPointRequirements[i].bindPoint == VK_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_TRANSIENT_ARM)
+        {
+            FFX_ASSERT(bindPointRequirements[i].bindPointType == VK_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_TYPE_MEMORY_ARM);
 
-    backendContext->vkFunctionTable.vkGetDataGraphPipelineSessionMemoryRequirementsARM(backendContext->device, &memoryRequirementsInfo, &memreqs);
+            VkDataGraphPipelineSessionMemoryRequirementsInfoARM info = {
+                VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_MEMORY_REQUIREMENTS_INFO_ARM, nullptr, session, bindPointRequirements[i].bindPoint, 0};
+
+            backendContext->vkFunctionTable.vkGetDataGraphPipelineSessionMemoryRequirementsARM(backendContext->device, &info, &memreqs);
+            break;
+        }
+    }
 
     backendContext->dataGraphPipelineSessionResource.memoryProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
@@ -5868,6 +6072,18 @@ FfxErrorCode DestroyPipelineVK(FfxInterface* backendInterface, FfxPipelineState*
 
     if (!pipeline)
         return FFX_OK;
+
+    // DATA GRAPH: `FfxPipelineState::session` is the Data Graph session handle (see FfxPipelineState in ffx_types.h).
+    // Evidence in this backend:
+    // - Set in CreateDataGraphPipelineVK via vkCreateDataGraphPipelineSessionARM.
+    // - Used at dispatch time: vkCmdDispatchDataGraphARM(..., (VkDataGraphPipelineSessionARM)pipeline.session, ...).
+    // Therefore it must be explicitly destroyed; otherwise internal allocations can survive until vkDestroyDevice.
+    if (pipeline->session != VK_NULL_HANDLE)
+    {
+        VkDataGraphPipelineSessionARM session = reinterpret_cast<VkDataGraphPipelineSessionARM>(pipeline->session);
+        backendContext->vkFunctionTable.vkDestroyDataGraphPipelineSessionARM(backendContext->device, session, nullptr);
+        pipeline->session = VK_NULL_HANDLE;
+    }
 
     // Destroy the pipeline
     VkPipeline vkPipeline = reinterpret_cast<VkPipeline>(pipeline->pipeline);
@@ -6069,10 +6285,20 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
         writeDescriptorSets[descriptorWriteIndex].dstBinding      = binding.slotIndex;
         writeDescriptorSets[descriptorWriteIndex].dstArrayElement = binding.arrayIndex;
 
-        bufferDescriptorInfos[bufferDescriptorIndex]        = {};
-        bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
+        bufferDescriptorInfos[bufferDescriptorIndex] = {};
+
+        if ((backendContext->pResources[resourceIndex].resourceDescription.flags & FFX_RESOURCE_FLAGS_BUFFER_ALIASED) == FFX_RESOURCE_FLAGS_BUFFER_ALIASED)
+        {
+            bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].aliasedBufferResource;
+            bufferDescriptorInfos[bufferDescriptorIndex].range  = VK_WHOLE_SIZE;
+        }
+        else
+        {
+            bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
+            bufferDescriptorInfos[bufferDescriptorIndex].range =
+                bufferUAV.size > 0 ? bufferUAV.size : backendContext->pResources[resourceIndex].resourceDescription.size;
+        }
         bufferDescriptorInfos[bufferDescriptorIndex].offset = bufferUAV.offset;
-        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferUAV.size > 0 ? bufferUAV.size : VK_WHOLE_SIZE;
 
         bufferDescriptorIndex++;
         descriptorWriteIndex++;
@@ -6428,10 +6654,19 @@ static FfxErrorCode executeGpuJobFragment(BackendContext_VK* backendContext, Ffx
         writeDescriptorSets[descriptorWriteIndex].dstBinding      = binding.slotIndex;
         writeDescriptorSets[descriptorWriteIndex].dstArrayElement = binding.arrayIndex;
 
-        bufferDescriptorInfos[bufferDescriptorIndex]        = {};
-        bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
+        bufferDescriptorInfos[bufferDescriptorIndex] = {};
+        if ((backendContext->pResources[resourceIndex].resourceDescription.flags & FFX_RESOURCE_FLAGS_BUFFER_ALIASED) == FFX_RESOURCE_FLAGS_BUFFER_ALIASED)
+        {
+            bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].aliasedBufferResource;
+            bufferDescriptorInfos[bufferDescriptorIndex].range  = VK_WHOLE_SIZE;
+        }
+        else
+        {
+            bufferDescriptorInfos[bufferDescriptorIndex].buffer = backendContext->pResources[resourceIndex].bufferResource;
+            bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferUAV.size > 0 ? bufferUAV.size : VK_WHOLE_SIZE;
+        }
+
         bufferDescriptorInfos[bufferDescriptorIndex].offset = bufferUAV.offset;
-        bufferDescriptorInfos[bufferDescriptorIndex].range  = bufferUAV.size > 0 ? bufferUAV.size : VK_WHOLE_SIZE;
 
         bufferDescriptorIndex++;
         descriptorWriteIndex++;

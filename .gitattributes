@@ -1,3 +1,4 @@
+*.so filter=lfs diff=lfs merge=lfs -text
 *.a filter=lfs diff=lfs merge=lfs -text
 *.lib filter=lfs diff=lfs merge=lfs -text
 *.dll filter=lfs diff=lfs merge=lfs -text
@@ -7,3 +8,4 @@ FidelityFX_SC filter=lfs diff=lfs merge=lfs -text
 Model_Parser filter=lfs diff=lfs merge=lfs -text
 sdk/libs/libSPIRV-Tools-android-arm.a filter=lfs diff=lfs merge=lfs -text
 sdk/libs/libSPIRV-Tools-opt-android-arm.a filter=lfs diff=lfs merge=lfs -text
+samples/assets/** filter=lfs diff=lfs merge=lfs -text

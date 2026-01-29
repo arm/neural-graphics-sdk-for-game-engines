@@ -1,7 +1,8 @@
 This project contains code and binaries from other projects. The original license text is included in, or next to, those files.
 The binaries are model files, libraries and executables in these folders:
 prebuilt_binaries/
-sdk/libs/
+samples/assets/fonts/
+samples/assets/scenes/sponza/
 sdk/tools/binary_store/
 sdk/tools/ffx_model_parser/libs/vgf/
 sdk/tools/ffx_shader_compiler/libs/glslangValidator/

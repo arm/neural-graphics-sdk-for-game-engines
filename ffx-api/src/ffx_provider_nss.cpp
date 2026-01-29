@@ -52,8 +52,6 @@ static uint32_t ConvertContextFlagsNss(uint32_t apiFlags)
         outFlags |= FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT)
         outFlags |= FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_DISABLE_PADDING)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_DISABLE_PADDING;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
         outFlags |= FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING;
     return outFlags;
@@ -240,11 +238,8 @@ ffxReturnCode_t ffxProvider_Nss::Dispatch(ffxContext* context, const ffxDispatch
         dispatchParameters.commandList               = desc->commandList;
         dispatchParameters.color                     = Convert(desc->color);
         dispatchParameters.depth                     = Convert(desc->depth);
-        dispatchParameters.depthTm1                  = Convert(desc->depthTm1);
         dispatchParameters.motionVectors             = Convert(desc->motionVectors);
-        dispatchParameters.outputTm1                 = Convert(desc->outputTm1);
         dispatchParameters.output                    = Convert(desc->output);
-        dispatchParameters.debugViews                = Convert(desc->debugViews);
         dispatchParameters.jitterOffset.x            = desc->jitterOffset.x;
         dispatchParameters.jitterOffset.y            = desc->jitterOffset.y;
         dispatchParameters.cameraFar                 = desc->cameraFar;

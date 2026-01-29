@@ -60,7 +60,6 @@ static const ResourceBinding srvTextureBindingTable[] = {
     // For mirror padding
     {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR, L"r_unpadded_color"},
     {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH, L"r_unpadded_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH_TM1, L"r_unpadded_depth_tm1"},
     {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION, L"r_unpadded_motion"},
 
     {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR, L"r_input_color_jittered"},
@@ -85,8 +84,8 @@ static const ResourceBinding srvTextureBindingTable[] = {
 static const ResourceBinding nssUavTextureBindingTable[] = {
     {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, L"rw_luma_deriv"},
     {FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT, L"rw_upscaled_output"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT, L"rw_unpadded_output"},
     {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, L"rw_nearest_depth_coord_out"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS, L"rw_debug_views"},
 
     // For mirror padding
     {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR, L"rw_input_color_jittered"},
@@ -103,14 +102,14 @@ static const ResourceBinding srvTensorBindingTable[] = {
     {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR, L"r_coefficients_k3_tensor"},
     {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR, L"r_coefficients_k4_tensor"},
     {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"r_preprocessed_tensor"},
+    // Data graph resources
+    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"Resource_0_input"},
 };
 
 static const ResourceBinding uavTensorBindingTable[] = {
     // Shader resources - taken from shader reflection information
     {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"rw_preprocessed_tensor"},
-
     // Data graph resources - taken from data graph reflection information.
-    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"Resource_0_input"},
     {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, L"Resource_1_output"},
     {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR, L"Resource_2_output"},
     {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR, L"Resource_3_output"},
@@ -121,84 +120,50 @@ static const ResourceBinding uavTensorBindingTable[] = {
 
 #define FFX_LENGTH(x, y) (sqrt((x) * (x) + (y) * (y)))
 
+static void printMessage(const FfxNssContext_Private* context, const FfxMsgType type, const wchar_t* message)
+{
+    if (context && context->contextDescription.fpMessage != nullptr && message != nullptr)
+    {
+        context->contextDescription.fpMessage(type, message);
+    }
+}
+
 static void nssDebugCheckDispatch(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
 {
     if (params->commandList == nullptr)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"commandList is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"commandList is null");
     }
 
     if (params->color.resource == nullptr)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"color resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"color resource is null");
     }
 
     if (params->depth.resource == nullptr)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"depth resource is null");
-    }
-
-    if (params->depthTm1.resource == nullptr)
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"depthTm1 resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"depth resource is null");
     }
 
     if (params->motionVectors.resource == nullptr)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"motionVectors resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"motionVectors resource is null");
     }
 
     if (params->output.resource == nullptr)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"output resource is null");
-    }
-
-    if (params->debugViews.resource == nullptr && (params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW))
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR, L"debugViews resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"output resource is null");
     }
 
     if (fabs(params->jitterOffset.x) > 1.0f || fabs(params->jitterOffset.y) > 1.0f)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"jitterOffset contains value outside of expected range [-1.0, 1.0]");
-    }
-
-    if ((params->renderSize.width == 0) || (params->renderSize.height == 0))
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"renderSize contains zero dimension");
-    }
-
-    if (params->upscaleSize.width / params->renderSize.width - 2.0f > FLT_EPSILON)
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"It's recommanded to use upscale ratio less than x2.");
-    }
-
-    if ((params->renderSize.width != context->contextDescription.maxRenderSize.width) ||
-        (params->renderSize.height != context->contextDescription.maxRenderSize.height))
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"renderSize is different from context maxRenderSize");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"jitterOffset contains value outside of expected range [-1.0, 1.0]");
     }
 
     if (fabs(params->motionVectorScale.x) > (float)context->contextDescription.maxRenderSize.width ||
         fabs(params->motionVectorScale.y) > (float)context->contextDescription.maxRenderSize.height)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"motionVectorScale is greater than context maxRenderSize");
-    }
-
-    if ((params->upscaleSize.width == 0) || (params->upscaleSize.height == 0))
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"upscaleSize contains zero dimension");
-    }
-
-    if ((params->upscaleSize.width != context->contextDescription.maxUpscaleSize.width) ||
-        (params->upscaleSize.height != context->contextDescription.maxUpscaleSize.height))
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"upscaleSize is different from context maxUpscaleSize");
-    }
-
-    if (context->paddedInputWidth % FFX_NSS_RESOURCE_ALIGNMENT != 0 || context->paddedInputHeight % FFX_NSS_RESOURCE_ALIGNMENT != 0)
-    {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"padded input size is not aligned to required alignment");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"motionVectorScale is greater than context maxRenderSize");
     }
 }
 
@@ -285,7 +250,7 @@ static uint32_t getPipelinePermutationFlags(FfxNssContext_Private* context, cons
         }
         else
         {
-            context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_WARNING, L"16-bit resources requested but not supported by the device.");
+            printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"16-bit resources requested but not supported by the device.");
         }
     }
 
@@ -314,8 +279,8 @@ static FfxErrorCode createPipelineStates(FfxNssContext_Private* context)
     // Samplers
     pipelineDescription.samplerCount      = 2;
     FfxSamplerDescription samplerDescs[2] = {
-        {FFX_FILTER_TYPE_MINMAGMIP_POINT, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE},
-        {FFX_FILTER_TYPE_MINMAGMIP_LINEAR, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE}};
+        {FFX_FILTER_TYPE_MINMAGMIP_POINT, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE, FFX_FALSE},
+        {FFX_FILTER_TYPE_MINMAGMIP_LINEAR, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE, FFX_FALSE}};
     pipelineDescription.samplers = samplerDescs;
 
     // Set up pipeline descriptor (basically RootSignature and binding)
@@ -338,10 +303,7 @@ static FfxErrorCode createPipelineStates(FfxNssContext_Private* context)
         return FFX_OK;
     };
 
-    if (context->hasPaddingPass)
-    {
-        FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_MIRROR_PADDING, L"NSS-MirrorPadding", &context->pipelineNssMirrorPadding));
-    }
+    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_MIRROR_PADDING, L"NSS-MirrorPadding", &context->pipelineNssMirrorPadding));
     FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_PREPROCESS, L"NSS-Preprocess", &context->pipelineNssPreprocess));
     FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_POSTPROCESS, L"NSS-Postprocess", &context->pipelineNssPostprocess));
     FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DEBUG_VIEW, L"NSS-DebugView", &context->pipelineNssDebugView));
@@ -421,6 +383,27 @@ static bool ComputePaddedResolution(const uint32_t unpaddedInputWidth,
            paddedOutputHeight != unpaddedOutputHeight;
 }
 
+static void nssDebugCheckCreate(FfxNssContext_Private* context)
+{
+    FFX_ASSERT(context);
+    const FfxNssContextDescription& desc = context->contextDescription;
+
+    if (fabs(desc.maxUpscaleSize.width / desc.maxRenderSize.width) - fabs(desc.maxUpscaleSize.height / desc.maxRenderSize.height) < FLT_EPSILON)
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"width/height has different upscale ratio");
+    }
+
+    if (desc.maxUpscaleSize.width / desc.maxRenderSize.width - 2.0f > FLT_EPSILON)
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"It's recommanded to use upscale ratio less than x2.");
+    }
+
+    if (context->paddedInputWidth % FFX_NSS_RESOURCE_ALIGNMENT != 0 || context->paddedInputHeight % FFX_NSS_RESOURCE_ALIGNMENT != 0)
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"padded input size is not aligned to required alignment");
+    }
+}
+
 static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContextDescription* contextDescription)
 {
     FFX_ASSERT(context);
@@ -431,6 +414,11 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
     context->device = contextDescription->backendInterface.device;
 
     memcpy(&context->contextDescription, contextDescription, sizeof(FfxNssContextDescription));
+
+    if ((context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
+    {
+        nssDebugCheckCreate(context);
+    }
 
     // Create the context.
     FfxErrorCode errorCode = context->contextDescription.backendInterface.fpCreateBackendContext(
@@ -445,25 +433,24 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
     const bool neuralGraphicsSupported = context->deviceCapabilities.tensorSupported && context->deviceCapabilities.dataGraphSupported;
     if (!neuralGraphicsSupported)
     {
-        context->contextDescription.fpMessage(FFX_MESSAGE_TYPE_ERROR,
-                                              L"NSS requires device with support for tensors and data graphs. "
-                                              L"Please check device capabilities.");
+        printMessage(context,
+                     FFX_MESSAGE_TYPE_ERROR,
+                     L"NSS requires device with support for tensors and data graphs. "
+                     L"Please check device capabilities.");
         return FFX_ERROR_NULL_DEVICE;
     }
 
     // set defaults
     context->firstExecution     = true;
     context->resourceFrameIndex = 0;
-    const bool needPaddingPass  = ComputePaddedResolution(contextDescription->maxRenderSize.width,
-                                                         contextDescription->maxRenderSize.height,
-                                                         contextDescription->maxUpscaleSize.width,
-                                                         contextDescription->maxUpscaleSize.height,
-                                                         context->paddedInputWidth,
-                                                         context->paddedInputHeight,
-                                                         context->paddedOutputWidth,
-                                                         context->paddedOutputHeight);
-    const bool hasPaddingFlag   = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_DISABLE_PADDING) == 0;
-    context->hasPaddingPass     = hasPaddingFlag && needPaddingPass;
+    context->hasPaddingPass     = ComputePaddedResolution(contextDescription->maxRenderSize.width,
+                                                      contextDescription->maxRenderSize.height,
+                                                      contextDescription->maxUpscaleSize.width,
+                                                      contextDescription->maxUpscaleSize.height,
+                                                      context->paddedInputWidth,
+                                                      context->paddedInputHeight,
+                                                      context->paddedOutputWidth,
+                                                      context->paddedOutputHeight);
 
     // NOTE: This will not work for RHI-NNE Backend!
     FfxSurfaceFormat tensorFormatSingleChannel = ((contextDescription->flags & FFX_NSS_CONTEXT_FLAG_QUANTIZED) == FFX_NSS_CONTEXT_FLAG_QUANTIZED)
@@ -637,6 +624,71 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
          1,
          coefficientsTensorChannel,
          4},
+        {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR,
+         L"NSS_padded_input_color_jittered",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
+         context->paddedInputWidth,
+         context->paddedInputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
+
+        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1,
+         L"NSS_padded_input_depth_1",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R32_FLOAT,
+         context->paddedInputWidth,
+         context->paddedInputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
+
+        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2,
+         L"NSS_padded_input_depth_2",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R32_FLOAT,
+         context->paddedInputWidth,
+         context->paddedInputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
+
+        {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS,
+         L"NSS_padded_input_motion_vectors",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R16G16_FLOAT,
+         context->paddedInputWidth,
+         context->paddedInputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
+
+        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1,
+         L"NSS_padded_upscaled_color_1",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
+         context->paddedOutputWidth,
+         context->paddedOutputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
+
+        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2,
+         L"NSS_padded_upscaled_color_2",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
+         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
+         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
+         context->paddedOutputWidth,
+         context->paddedOutputHeight,
+         1,
+         FFX_RESOURCE_FLAGS_NONE,
+         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
     };
 
     // clear the SRV resources to NULL.
@@ -646,82 +698,6 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
     for (int32_t currentSurfaceIndex = 0; currentSurfaceIndex < FFX_ARRAY_ELEMENTS(internalSurfaceDesc); ++currentSurfaceIndex)
     {
         FFX_VALIDATE(createResourceFromDescription(context, &internalSurfaceDesc[currentSurfaceIndex]));
-    }
-
-    if (context->hasPaddingPass)
-    {
-        const FfxInternalResourceDescription mirrorPaddingInternalSurfaceDesc[] = {
-            {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR,
-             L"NSS_padded_input_color_jittered",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-             context->paddedInputWidth,
-             context->paddedInputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-            {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH,
-             L"NSS_padded_input_depth",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R32_FLOAT,
-             context->paddedInputWidth,
-             context->paddedInputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-            {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1,
-             L"NSS_padded_input_depth_tm1",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R32_FLOAT,
-             context->paddedInputWidth,
-             context->paddedInputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-            {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS,
-             L"NSS_padded_input_motion_vectors",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R16G16_FLOAT,
-             context->paddedInputWidth,
-             context->paddedInputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-            {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1,
-             L"NSS_padded_upscaled_color_1",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-             context->paddedOutputWidth,
-             context->paddedOutputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-            {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2,
-             L"NSS_padded_upscaled_color_2",
-             FFX_RESOURCE_TYPE_TEXTURE2D,
-             (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-             FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-             context->paddedOutputWidth,
-             context->paddedOutputHeight,
-             1,
-             FFX_RESOURCE_FLAGS_NONE,
-             {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-        };
-
-        for (int32_t currentSurfaceIndex = 0; currentSurfaceIndex < FFX_ARRAY_ELEMENTS(mirrorPaddingInternalSurfaceDesc); ++currentSurfaceIndex)
-        {
-            FFX_VALIDATE(createResourceFromDescription(context, &mirrorPaddingInternalSurfaceDesc[currentSurfaceIndex]));
-        }
     }
 
     // copy resources to uavResrouces list
@@ -740,10 +716,7 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
 
-    if (context->hasPaddingPass)
-    {
-        ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssMirrorPadding, context->effectContextId);
-    }
+    ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssMirrorPadding, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssPreprocess, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDataGraph, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssPostprocess, context->effectContextId);
@@ -759,16 +732,8 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
     constexpr uint32_t external_resources[] = {
         FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR,
         FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH,
-        FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH_TM1,
         FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION,
         FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT,
-        FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS,
-        // the following resources will be created internally if padding pass is used, otherwise they are created externally
-        FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR,
-        FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH,
-        FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1,
-        FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS,
-        FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT,
     };
     for (uint32_t i = 0; i < FFX_COUNTOF(external_resources); ++i)
     {
@@ -777,7 +742,7 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
     }
 
     // Destroy the context
-    context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId);
+    FFX_VALIDATE(context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId));
 
     return FFX_OK;
 }
@@ -928,6 +893,9 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     constants._UnpaddedInputDims[0] = params->renderSize.width;
     constants._UnpaddedInputDims[1] = params->renderSize.height;
 
+    constants._UnpaddedOutputDims[0] = params->upscaleSize.width;
+    constants._UnpaddedOutputDims[1] = params->upscaleSize.height;
+
     // The passed in jitter offset is in pixel space of unpadded render size
     const float jitterUvX = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
     const float jitterUvY = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
@@ -1014,10 +982,11 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     }
 
     // initialize constantBuffers data
-    context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
-                                                                               &context->constants,
-                                                                               sizeof(context->constants),
-                                                                               &context->constantBuffers[FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS]);
+    FFX_ASSERT(context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
+                                                                                          &context->constants,
+                                                                                          sizeof(context->constants),
+                                                                                          &context->constantBuffers[FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS]) ==
+               FFX_OK);
 }
 
 static void scheduleDispatch(FfxNssContext_Private*           context,
@@ -1091,7 +1060,7 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
             context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
     }
 
-    context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
+    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob) == FFX_OK);
 }
 
 static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, FfxPipelineState* pipeline, wchar_t* debugName)
@@ -1124,7 +1093,7 @@ static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispat
 
     dataGraphJob.dataGraphJobDescription.pipeline = *pipeline;
 
-    context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dataGraphJob);
+    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dataGraphJob) == FFX_OK);
 }
 
 static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
@@ -1148,26 +1117,21 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     const bool resetAccumulation = NeedResetHistory(context, params);
     if (resetAccumulation)
     {
-        constexpr uint32_t resources_to_clear[] = {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
+        constexpr uint32_t resources_to_clear[] = {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1,
+                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2,
+                                                   FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
                                                    FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2,
                                                    FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1,
                                                    FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2,
                                                    FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2};
+                                                   FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2,
+                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1,
+                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2};
 
         for (uint32_t i = 0; i < FFX_COUNTOF(resources_to_clear); ++i)
         {
             clearJob.clearJobDescriptor.target = context->srvResources[resources_to_clear[i]];
-            context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-        }
-
-        if (context->hasPaddingPass)
-        {
-            clearJob.clearJobDescriptor.target = context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1];
-            context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-
-            clearJob.clearJobDescriptor.target = context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2];
-            context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
+            FFX_VALIDATE(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob));
         }
     }
 
@@ -1183,59 +1147,45 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     const uint32_t depthOffsetResourceIndex =
         isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1 : FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2;
 
-    const uint32_t paddedOutputResourceIndex  = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2;
-    const uint32_t paddedHistoryResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1;
+    const uint32_t outputResourceIndex  = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2;
+    const uint32_t historyResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1;
+
+    const uint32_t depthResourceIndex    = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2;
+    const uint32_t depthTm1ResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1;
 
     // Setup the resources for mirror padding and pre-process stage
     {
-        // Input: Color/Depth/Depth tm1/Motion/History
-        // If padding pass is needed, these inputs are register to unpadded resource ids used by mirror padding stage, and the
-        // mirror padding stage will output to padded resource ids used by pre-process stage, which is already setup in nssCreate().
-        // If padding pass is not needed, we register these inputs directly to padded resource ids used by pre-process stage.
-        const uint32_t external_input_color_resource_id =
-            context->hasPaddingPass ? FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR : FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR;
-        const uint32_t external_input_depth_resource_id =
-            context->hasPaddingPass ? FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH : FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH;
-        const uint32_t external_input_depth_tm1_resource_id =
-            context->hasPaddingPass ? FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH_TM1 : FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1;
-        const uint32_t external_input_motion_resource_id =
-            context->hasPaddingPass ? FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION : FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS;
-
         // Input: Depth tm1
-        context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                        &params->depthTm1,
-                                                                        context->effectContextId,
-                                                                        &context->srvResources[external_input_depth_tm1_resource_id]);
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1] = context->srvResources[depthTm1ResourceIndex];
 
         // Input: Depth
-        context->contextDescription.backendInterface.fpRegisterResource(
-            &context->contextDescription.backendInterface, &params->depth, context->effectContextId, &context->srvResources[external_input_depth_resource_id]);
+        // The extenral depth is registered as unpadded depth, the mirror padding pass will write the padded depth to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH
+        // and the NSS preprocess pass will read FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH.
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                     &params->depth,
+                                                                                     context->effectContextId,
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH]));
+        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH] = context->uavResources[depthResourceIndex];
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH] = context->srvResources[depthResourceIndex];
 
         // Input: Color
-        context->contextDescription.backendInterface.fpRegisterResource(
-            &context->contextDescription.backendInterface, &params->color, context->effectContextId, &context->srvResources[external_input_color_resource_id]);
+        // The external color is registered as unpadded color, the mirror padding pass will write the padded color to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                     &params->color,
+                                                                                     context->effectContextId,
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR]));
 
         // Input: Motion vector
-        context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                        &params->motionVectors,
-                                                                        context->effectContextId,
-                                                                        &context->srvResources[external_input_motion_resource_id]);
+        // The external motion is registered as unppaded motion, the mirror padding pass will write the padded motion to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                     &params->motionVectors,
+                                                                                     context->effectContextId,
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION]));
 
         // Input: History
-        // When there is padding pass, history will use the padded history generated by last frame.
-        // When there is no padding pass, history is registered to the external history resource directly.
-        if (context->hasPaddingPass)
-        {
-            FFX_ASSERT(context->uavResources[paddedHistoryResourceIndex].internalIndex == context->srvResources[paddedHistoryResourceIndex].internalIndex);
-            context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR] = context->srvResources[paddedHistoryResourceIndex];
-        }
-        else
-        {
-            context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                            &params->outputTm1,
-                                                                            context->effectContextId,
-                                                                            &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR]);
-        }
+        // History will use the padded history generated by last frame.
+        FFX_ASSERT(context->uavResources[historyResourceIndex].internalIndex == context->srvResources[historyResourceIndex].internalIndex);
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR] = context->srvResources[historyResourceIndex];
 
         // Input: DepthOffset tm1
         context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_TM1] = context->srvResources[depthOffsetTm1ResourceIndex];
@@ -1284,52 +1234,28 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
         // Input: History, already setup in pre-process stage, nothing to do here.
 
         // Output: Upscaled padded output
-        // If padding pass is needed, upscaled output resource id is already setup in nssCreate(), we register the external output resource to unppaded output resource id.
-        // If padding pass is not needed, we register the external output resource to upscaled output resource id.
-        if (context->hasPaddingPass)
-        {
-            FFX_ASSERT(context->uavResources[paddedOutputResourceIndex].internalIndex == context->srvResources[paddedOutputResourceIndex].internalIndex);
-            context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->uavResources[paddedOutputResourceIndex];
-            context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->srvResources[paddedOutputResourceIndex];
+        // upscaled output resource id is already setup in nssCreate(), we register the external output resource to unppaded output resource id.
+        FFX_ASSERT(context->uavResources[outputResourceIndex].internalIndex == context->srvResources[outputResourceIndex].internalIndex);
+        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->uavResources[outputResourceIndex];
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->srvResources[outputResourceIndex];
 
-            context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                            &params->output,
-                                                                            context->effectContextId,
-                                                                            &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT]);
-        }
-        else
-        {
-            context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                            &params->output,
-                                                                            context->effectContextId,
-                                                                            &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT]);
-        }
+        // Output: User unpadded output
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                     &params->output,
+                                                                                     context->effectContextId,
+                                                                                     &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT]));
     }
 
-    if ((params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW)
-    {
-        context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                        &params->debugViews,
-                                                                        context->effectContextId,
-                                                                        &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS]);
-
-        clearJob.clearJobDescriptor.target = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS];
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
-    }
-
-    const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(context->paddedInputWidth, 16);
-    const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(context->paddedInputHeight, 16);
-    const int32_t dispatchDstX = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputWidth, 16);
-    const int32_t dispatchDstY = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputHeight, 16);
+    const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(context->paddedInputWidth, FFX_NSS_THREAD_GROUP_WIDTH);
+    const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(context->paddedInputHeight, FFX_NSS_THREAD_GROUP_HEIGHT);
+    const int32_t dispatchDstX = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputWidth, FFX_NSS_THREAD_GROUP_WIDTH);
+    const int32_t dispatchDstY = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputHeight, FFX_NSS_THREAD_GROUP_HEIGHT);
 
     const bool require16bit = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT) == FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
     const bool use16bit     = require16bit && context->deviceCapabilities.fp16Supported;
     setupConstantBuffer(context, params, use16bit);
 
-    if (context->hasPaddingPass)
-    {
-        scheduleDispatch(context, params, &context->pipelineNssMirrorPadding, dispatchSrcX, dispatchSrcY, L"MirrorPadding");
-    }
+    scheduleDispatch(context, params, &context->pipelineNssMirrorPadding, dispatchSrcX, dispatchSrcY, L"MirrorPadding");
 
     scheduleDispatch(context, params, &context->pipelineNssPreprocess, dispatchSrcX, dispatchSrcY, L"Preprocess");
 
@@ -1337,21 +1263,11 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
 
     scheduleDispatch(context, params, &context->pipelineNssPostprocess, dispatchDstX, dispatchDstY, L"Postprocess");
 
-    if (context->hasPaddingPass)
+    const bool hasDebugView = (params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW;
+    if (hasDebugView)
     {
-        FfxGpuJobDescription copyJob = {FFX_GPU_JOB_COPY};
-
-        copyJob.copyJobDescriptor.src      = context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT];
-        copyJob.copyJobDescriptor.dst      = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT];
-        copyJob.copyJobDescriptor.copyMode = FFX_GPU_COPY_DST_EXTENT;  // We want to crop the padded output to the unpadded output.
-
-        context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &copyJob);
-    }
-
-    if ((params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW)
-    {
-        const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(params->renderSize.width, 16);
-        const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(params->renderSize.height, 16);
+        const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(params->renderSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+        const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(params->renderSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
         scheduleDispatch(context, params, &context->pipelineNssDebugView, dispatchSrcX, dispatchSrcY, L"DebugView");
     }
 
@@ -1359,10 +1275,12 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     // NSS_MAX_QUEUED_FRAMES must be an even number.
     FFX_STATIC_ASSERT((NSS_MAX_QUEUED_FRAMES & 1) == 0);
 
-    context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList, context->effectContextId);
+    FFX_VALIDATE(
+        context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList, context->effectContextId));
 
     // release dynamic resources
-    context->contextDescription.backendInterface.fpUnregisterResources(&context->contextDescription.backendInterface, commandList, context->effectContextId);
+    FFX_VALIDATE(context->contextDescription.backendInterface.fpUnregisterResources(
+        &context->contextDescription.backendInterface, commandList, context->effectContextId));
 
     context->firstExecution = false;
     return FFX_OK;

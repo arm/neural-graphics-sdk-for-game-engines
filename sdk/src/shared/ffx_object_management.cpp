@@ -28,7 +28,7 @@ void ffxSafeReleasePipeline(FfxInterface* backendInterface, FfxPipelineState* pi
     FFX_ASSERT(pipeline);
     FFX_ASSERT(backendInterface->fpDestroyPipeline);
 
-    backendInterface->fpDestroyPipeline(backendInterface, pipeline, effectContextId);
+    FFX_ASSERT(backendInterface->fpDestroyPipeline(backendInterface, pipeline, effectContextId) == FFX_OK);
 }
 
 void ffxSafeReleaseCopyResource(FfxInterface* backendInterface, FfxResourceInternal resource, FfxUInt32 effectContextId)
@@ -37,12 +37,12 @@ void ffxSafeReleaseCopyResource(FfxInterface* backendInterface, FfxResourceInter
 
     FfxResourceInternal copyResource;
     copyResource.internalIndex = resource.internalIndex + 1;
-    backendInterface->fpDestroyResource(backendInterface, copyResource, effectContextId);
+    FFX_ASSERT(backendInterface->fpDestroyResource(backendInterface, copyResource, effectContextId) == FFX_OK);
 }
 
 void ffxSafeReleaseResource(FfxInterface* backendInterface, FfxResourceInternal resource, FfxUInt32 effectContextId)
 {
     FFX_ASSERT(backendInterface->fpDestroyResource);
 
-    backendInterface->fpDestroyResource(backendInterface, resource, effectContextId);
+    FFX_ASSERT(backendInterface->fpDestroyResource(backendInterface, resource, effectContextId) == FFX_OK);
 }

@@ -14,3 +14,23 @@ sdk/tools/ffx_model_parser/build/
 /gen_docs
 
 *.log
+
+# Samples specific ignores
+samples/.github/
+samples/cache
+samples/build
+samples/.vs
+samples/.vscode
+samples/.idea
+samples/imgui.ini
+samples/doxygen/
+samples/tests/system_test/artifacts
+samples/tests/system_test/tmp
+samples/output/*
+samples/.mypy_cache
+samples/tags
+samples/*~
+samples/.*.sw*
+samples/.sw*
+samples/.tracy
+samples/.DS_Store

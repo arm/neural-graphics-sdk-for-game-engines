@@ -47,5 +47,6 @@ void Postprocess(int32_t2 output_pixel)
     //-------------------------------------------------------------------------
     half3 out_linear = InverseTonemap(accumulated) * InvExposure();
     WriteUpsampledColour(output_pixel, out_linear);
+    WriteUnpaddedOutput(output_pixel, out_linear);
 }
 #endif  // GPU_NSS_POSTPROCESS_H

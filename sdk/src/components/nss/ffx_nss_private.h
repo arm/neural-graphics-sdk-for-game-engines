@@ -99,12 +99,14 @@ typedef struct NssConstants
     FfxFloat32x4 _JitterOffsetTm1;  ///<  Last frame's jitter offset. .xy = pixels, .zw = uvs
     FfxFloat32x4 _ScaleFactor;      ///<  Upscale factor. .xy = scale, .zw = inverse scale
 
-    FfxUInt32x2  _OutputDims;         ///< Upscaled image dimensions (width, height)
-    FfxUInt32x2  _InputDims;          ///< Rendered image dimensions (width, height)
-    FfxFloat32x2 _InvOutputDims;      ///< Inverse upscaled image dimensions (width, height)
-    FfxFloat32x2 _InvInputDims;       ///< Inverse rendered image dimensions (width, height)
-    FfxFloat32x2 _MotionVectorScale;  ///< .x = motion vector scale.x, .y = motion vector scale.y
-    FfxUInt32x2  _UnpaddedInputDims;  ///< Unpadded rendered image dimensions (width, height)
+    FfxUInt32x2  _OutputDims;          ///< Upscaled image dimensions (width, height)
+    FfxUInt32x2  _InputDims;           ///< Rendered image dimensions (width, height)
+    FfxFloat32x2 _InvOutputDims;       ///< Inverse upscaled image dimensions (width, height)
+    FfxFloat32x2 _InvInputDims;        ///< Inverse rendered image dimensions (width, height)
+    FfxFloat32x2 _MotionVectorScale;   ///< .x = motion vector scale.x, .y = motion vector scale.y
+    FfxUInt32x2  _UnpaddedInputDims;   ///< Unpadded rendered image dimensions (width, height)
+    FfxUInt32x2  _UnpaddedOutputDims;  ///< Unpadded display image dimensions (width, height)
+    FfxUInt32x2  _Paddding;            ///< Unused memory padding.
 
     union
     {

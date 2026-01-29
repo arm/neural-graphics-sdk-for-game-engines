@@ -328,6 +328,7 @@ typedef enum FfxSurfaceFormat
     FFX_SURFACE_FORMAT_R8_SNORM,               ///<  8 bit per channel, 1 channel signed normalized format
     FFX_SURFACE_FORMAT_R8G8_UNORM,             ///<  8 bit per channel, 2 channel unsigned normalized format
     FFX_SURFACE_FORMAT_R8G8_UINT,              ///<  8 bit per channel, 2 channel unsigned integer format
+    FFX_SURFACE_FORMAT_R8G8_SINT,              ///<  8 bit per channel, 2 channel signed integer format
     FFX_SURFACE_FORMAT_R32_FLOAT,              ///< 32 bit per channel, 1 channel float format
     FFX_SURFACE_FORMAT_R9G9B9E5_SHAREDEXP,     ///<  9 bit per channel, 5 bit exponent format
 
@@ -385,7 +386,7 @@ typedef enum FfxResourceStates
     FFX_RESOURCE_STATE_DATA_GRAPH_READ   = (1 << 9),                      ///< Indicates a resource is in the state to be read by data graph
     FFX_RESOURCE_STATE_DATA_GRAPH_WRITE  = (1 << 10),                     ///< Indicates a resource is in the state to be written by data graph
     // used by FrameInterpolationSwapchain
-    FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT = (1 << 12),  ///< Indicates a resource is in the state to be used as depth attachment
+    FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT = (1 << 11),  ///< Indicates a resource is in the state to be used as depth attachment
 
 } FfxResourceStates;
 
@@ -418,10 +419,11 @@ typedef enum FfxResourceViewDimension
 typedef enum FfxResourceFlags
 {
 
-    FFX_RESOURCE_FLAGS_NONE          = 0,         ///< No flags.
-    FFX_RESOURCE_FLAGS_ALIASABLE     = (1 << 0),  ///< A bit indicating a resource does not need to persist across frames.
-    FFX_RESOURCE_FLAGS_IMAGE_ALIASED = (1 << 1),  ///< A bit indicating a resource's (tensor or buffer) memory will be aliased to an image
-    FFX_RESOURCE_FLAGS_UNDEFINED     = (1 << 2),  ///< Special case flag used internally when importing resources that require additional setup
+    FFX_RESOURCE_FLAGS_NONE           = 0,         ///< No flags.
+    FFX_RESOURCE_FLAGS_ALIASABLE      = (1 << 0),  ///< A bit indicating a resource does not need to persist across frames.
+    FFX_RESOURCE_FLAGS_IMAGE_ALIASED  = (1 << 1),  ///< A bit indicating a resource's (tensor or buffer) memory will be aliased to an image
+    FFX_RESOURCE_FLAGS_BUFFER_ALIASED = (1 << 2),  ///< A bit indicating a resource creates an aliased buffer
+    FFX_RESOURCE_FLAGS_UNDEFINED      = (1 << 3),  ///< Special case flag used internally when importing resources that require additional setup
 } FfxResourceFlags;
 
 /// An enumeration of all resource view types.
@@ -858,6 +860,8 @@ typedef FfxConstantAllocation (*FfxConstantBufferAllocator)(void* data, const Ff
 typedef struct FfxResourceInternal
 {
     int32_t internalIndex;  ///< The index of the resource.
+    uint32_t
+        alignedWidth;  ///< TODO ARM: remove this, this should be a clean type! AlignedWidth should be resource metadata and its only relevant for buffer-image aliasing.
 } FfxResourceInternal;
 
 /// An enumeration for resource init data types that can be passed
@@ -1021,6 +1025,7 @@ typedef struct FfxSamplerDescription
     FfxAddressMode addressModeV;
     FfxAddressMode addressModeW;
     FfxBindStage   stage;
+    FfxBoolean     unnormalizedCoordinates;
 } FfxSamplerDescription;
 
 /// A structure containing the data required to create root constant buffer mappings
@@ -1294,25 +1299,7 @@ typedef struct FfxGpuJobDescription
 #endif  // #if defined(POPULATE_SHADER_BLOB_FFX)
 
 /// Macro definition to copy header shader blob information into its SDK structural representation
-/// Tensor resources zero-ed here, in case the shader blob does not contain them and the SDK does not support the tensor extensions.
-///
-/// @ingroup SDKTypes
 #define POPULATE_SHADER_BLOB_FFX(info, index)                                                                                                                  \
-    {                                                                                                                                                          \
-        info[index].blobData, info[index].blobSize, info[index].numConstantBuffers, info[index].numSRVTextures, info[index].numUAVTextures,                    \
-            info[index].numSRVBuffers, info[index].numUAVBuffers, info[index].numSamplers, info[index].numRTAccelerationStructures, info[index].numRTTextures, \
-            0u, 0u, info[index].constantBufferNames, info[index].constantBufferBindings, info[index].constantBufferCounts, info[index].constantBufferSpaces,   \
-            info[index].srvTextureNames, info[index].srvTextureBindings, info[index].srvTextureCounts, info[index].srvTextureSpaces,                           \
-            info[index].uavTextureNames, info[index].uavTextureBindings, info[index].uavTextureCounts, info[index].uavTextureSpaces,                           \
-            info[index].srvBufferNames, info[index].srvBufferBindings, info[index].srvBufferCounts, info[index].srvBufferSpaces, info[index].uavBufferNames,   \
-            info[index].uavBufferBindings, info[index].uavBufferCounts, info[index].uavBufferSpaces, info[index].samplerNames, info[index].samplerBindings,    \
-            info[index].samplerCounts, info[index].samplerSpaces, info[index].rtAccelerationStructureNames, info[index].rtAccelerationStructureBindings,       \
-            info[index].rtAccelerationStructureCounts, info[index].rtAccelerationStructureSpaces, info[index].rtTextureNames, info[index].rtTextureBindings,   \
-            info[index].rtTextureCounts, info[index].rtTextureSpaces, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr                   \
-    }
-
-// For shader blobs that contain tensor resources.
-#define POPULATE_SHADER_BLOB_FFX_TENSOR(info, index)                                                                                                           \
     {                                                                                                                                                          \
         info[index].blobData, info[index].blobSize, info[index].numConstantBuffers, info[index].numSRVTextures, info[index].numUAVTextures,                    \
             info[index].numSRVBuffers, info[index].numUAVBuffers, info[index].numSamplers, info[index].numRTAccelerationStructures, info[index].numRTTextures, \
@@ -1424,13 +1411,21 @@ typedef struct FfxDataGraphBlob
     const uint32_t       graphDataSize;
     const unsigned char* graphData;
 
-    const uint32_t   tensorNums;
-    const char**     tensorNames;
-    const uint32_t*  tensorSets;
-    const uint32_t*  tensorBindings;
-    const uint32_t*  tensorFormats;
-    const uint32_t*  tensorDimSize;
-    const uint64_t** tensorDims;
+    const uint32_t  inputTensorNums;
+    const char**    inputTensorNames;
+    const uint32_t* inputTensorSets;
+    const uint32_t* inputTensorBindings;
+    const uint32_t* inputTensorFormats;
+    const uint32_t* inputTensorDimSize;
+    const int64_t** inputTensorDims;
+
+    const uint32_t  outputTensorNums;
+    const char**    outputTensorNames;
+    const uint32_t* outputTensorSets;
+    const uint32_t* outputTensorBindings;
+    const uint32_t* outputTensorFormats;
+    const uint32_t* outputTensorDimSize;
+    const int64_t** outputTensorDims;
 } FfxDataGraphBlob;
 
 /// A structure describing the parameters passed from the

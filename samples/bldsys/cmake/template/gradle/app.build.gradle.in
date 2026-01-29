@@ -1,0 +1,84 @@
+plugins {
+	id 'com.android.application'
+}
+
+ext.vvl_version='1.4.321.0'
+apply from: "./download_vvl.gradle"
+
+android {
+	ndkVersion '28.2.13676358'
+	compileSdk 35
+
+	defaultConfig {
+		applicationId 'com.khronos.vulkan_samples'
+	namespace "com.khronos.vulkan_samples"
+		@MIN_SDK_VERSION@
+		targetSdk 35
+		versionCode 1
+		versionName "1.0"
+
+		externalNativeBuild {
+			@CMAKE_ARGUMENTS@
+		}
+	}
+
+	buildTypes {
+		debug {
+			debuggable true
+			jniDebuggable true
+		}
+
+		release {
+			minifyEnabled false
+			proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+			signingConfig debug.signingConfig
+		}
+		applicationVariants.all{variant ->
+			variant.outputs.each{output->
+                def tempName = output.outputFile.name
+                tempName = tempName.replace("app-", "vulkan_samples-")
+                output.outputFileName  = tempName
+			}
+        }
+	}
+
+	compileOptions {
+		sourceCompatibility JavaVersion.VERSION_21
+		targetCompatibility JavaVersion.VERSION_21
+	}
+
+	sourceSets {
+		main {
+			@ASSETS_SRC_DIRS@
+			@RES_SRC_DIRS@
+			@JAVA_SRC_DIRS@
+			@JNI_LIBS_SRC_DIRS@
+			@MANIFEST_FILE@
+		}
+	}
+
+	externalNativeBuild {
+		cmake {
+			version "3.22.1"
+			@CMAKE_PATH@
+		}
+	}
+
+	lint {
+		abortOnError false
+		checkReleaseBuilds false
+	}
+	
+	buildFeatures {
+		viewBinding true
+		prefab true
+	}
+}
+
+dependencies {
+	implementation 'androidx.appcompat:appcompat:1.7.0'
+	implementation 'com.google.android.material:material:1.12.0'
+	implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
+	implementation 'androidx.core:core:1.15.0'
+	implementation 'androidx.games:games-activity:3.0.5'
+}

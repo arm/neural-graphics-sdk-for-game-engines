@@ -156,6 +156,15 @@ endif()
 
 # Add appropriate graphics backend if requested
 if (FFX_GRAPHICS_API STREQUAL "vk")
+	# Configure SPIRV-Tools to build as static libraries
+	# arm_ng_sdk uses a custom fork of SPIRV-Tools with graph extensions
+	set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
+	set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
+	set(SPIRV_WERROR OFF CACHE BOOL "" FORCE)
+	# Set SPIRV-Headers location - must be non-cache variable so it propagates to subdirectory
+	set(SPIRV-Headers_SOURCE_DIR "${FFX_LIB_PATH}/SPIRV-Headers")
+	# Add SPIRV-Tools subdirectory
+	add_subdirectory(${FFX_LIB_PATH}/SPIRV-Tools)
 	add_subdirectory(${FFX_SRC_BACKENDS_PATH}/vk)
 endif()
 

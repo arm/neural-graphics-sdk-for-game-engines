@@ -30,7 +30,7 @@ void Preprocess(int32_t2 input_pixel)
     motion *= half(dot(motion_pix, motion_pix) > MotionWarpThresh());
 
     // calculate sample position(s) for everything in `tm1` frame
-    float2 reproj_uv       = uv - float2(motion);
+    float2 reproj_uv       = uv + float2(motion);
     float2 unjitter_tm1_uv = reproj_uv - JitterOffsetTm1Uv();
 
     //-------------------------------------------------------------------------

@@ -27,8 +27,9 @@
 #define NSS_BIND_SRV_K4_TENSOR                          7    // FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR
 #define NSS_BIND_SRV_NEAREST_DEPTH_COORD                8    // FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD
 #define NSS_BIND_UAV_UPSCALED_OUTPUT                    9    // FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT
+#define NSS_BIND_UAV_UNPADDED_OUTPUT                    10   // FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT
 
-#define NSS_BIND_CB_NSS                                 10
+#define NSS_BIND_CB_NSS                                 11
 
 // settings
 #ifndef HISTORY_CATMULL
@@ -38,16 +39,6 @@
 #include "nss/ffx_nss_callbacks_glsl.h"
 #include "nss/ffx_nss_postprocess.h"
 
-
-#ifndef FFX_NSS_THREAD_GROUP_WIDTH
-#define FFX_NSS_THREAD_GROUP_WIDTH 16
-#endif // FFX_NSS_THREAD_GROUP_WIDTH
-#ifndef FFX_NSS_THREAD_GROUP_HEIGHT
-#define FFX_NSS_THREAD_GROUP_HEIGHT 16
-#endif // FFX_NSS_THREAD_GROUP_HEIGHT
-#ifndef FFX_NSS_THREAD_GROUP_DEPTH
-#define FFX_NSS_THREAD_GROUP_DEPTH 1
-#endif // FFX_NSS_THREAD_GROUP_DEPTH
 #ifndef FFX_NSS_NUM_THREADS
 #define FFX_NSS_NUM_THREADS layout (local_size_x = FFX_NSS_THREAD_GROUP_WIDTH, local_size_y = FFX_NSS_THREAD_GROUP_HEIGHT, local_size_z = FFX_NSS_THREAD_GROUP_DEPTH) in;
 #endif // FFX_NSS_NUM_THREADS

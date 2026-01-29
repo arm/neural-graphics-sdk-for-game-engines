@@ -76,7 +76,7 @@ add_shader_output("${NSS_PERMUTATION_OUTPUTS}")
 
 # for now, assume files will be in vgf format (but extension might be slightly different )
 if (NOT NSS_DATA_GRAPH_EXT)
-    set(NSS_DATA_GRAPH_EXT *)
+    set(NSS_DATA_GRAPH_EXT vgf)
 endif()
 
 

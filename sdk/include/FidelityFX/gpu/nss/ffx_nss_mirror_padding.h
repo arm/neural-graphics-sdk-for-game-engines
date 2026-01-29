@@ -28,7 +28,6 @@ void ApplyMirrorPadding(int32_t2 input_pixel)
     StorePaddedColor(input_pixel, LoadUnpaddedColor(unpadded_uv));
     StorePaddedDepth(input_pixel, LoadUnpaddedDepth(unpadded_uv));
     StorePaddedMotion(input_pixel, LoadUnpaddedMotion(unpadded_uv));
-    StorePaddedDepthTm1(input_pixel, LoadUnpaddedDepthTm1(unpadded_uv));
 }
 
 #endif
