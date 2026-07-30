@@ -228,11 +228,13 @@ template <vkb::BindingType bindingType>
 template <typename FeatureType>
 inline FeatureType &PhysicalDevice<bindingType>::add_extension_features_impl()
 {
-	// We cannot request extension features if the physical device properties 2 instance extension isn't enabled
-	if (!instance.is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
+	// We need vkGetPhysicalDeviceFeatures2 / vkGetPhysicalDeviceProperties2.
+	// Available via VK_KHR_get_physical_device_properties2 extension OR core Vulkan 1.1+.
+	if (!instance.is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) &&
+	    VK_API_VERSION_MINOR(properties.apiVersion) < 1 && VK_API_VERSION_MAJOR(properties.apiVersion) <= 1)
 	{
 		throw std::runtime_error("Couldn't request feature from device as " + std::string(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) +
-		                         " isn't enabled!");
+		                         " isn't enabled and device doesn't support Vulkan 1.1+!");
 	}
 
 	// Add an (empty) extension features into the map of extension features
@@ -319,15 +321,20 @@ template <vkb::BindingType bindingType>
 template <typename FeatureType>
 inline FeatureType PhysicalDevice<bindingType>::get_extension_features_impl()
 {
-	// We cannot request extension features if the physical device properties 2 instance extension isn't enabled
-	if (!instance.is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
+	// We need vkGetPhysicalDeviceFeatures2.
+	// Available via VK_KHR_get_physical_device_properties2 extension OR core Vulkan 1.1+.
+	if (!instance.is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) &&
+	    VK_API_VERSION_MINOR(properties.apiVersion) < 1 && VK_API_VERSION_MAJOR(properties.apiVersion) <= 1)
 	{
 		throw std::runtime_error("Couldn't request feature from device as " + std::string(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) +
-		                         " isn't enabled!");
+		                         " isn't enabled and device doesn't support Vulkan 1.1+!");
 	}
 
 	// Get the extension feature
-	return handle.getFeatures2KHR<vk::PhysicalDeviceFeatures2KHR, FeatureType>().template get<FeatureType>();
+	// Use core Vulkan 1.1 getFeatures2 instead of KHR variant.
+	// Some emulation layers (e.g. VK_LAYER_ML_Graph_Emulation) only intercept
+	// vkGetPhysicalDeviceFeatures2 but not vkGetPhysicalDeviceFeatures2KHR.
+	return handle.template getFeatures2<vk::PhysicalDeviceFeatures2, FeatureType>().template get<FeatureType>();
 }
 
 template <vkb::BindingType bindingType>

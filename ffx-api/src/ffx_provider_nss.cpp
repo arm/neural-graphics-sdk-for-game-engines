@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #include "ffx_provider_nss.h"
@@ -35,6 +35,13 @@
 
 #include <stdlib.h>
 
+static_assert(static_cast<uint32_t>(FfxNssShaderQualityMode::FFX_NSS_SHADER_QUALITY_MODE_QUALITY) ==
+              static_cast<uint32_t>(FfxApiNssShaderQualityMode::FFX_API_NSS_SHADER_QUALITY_MODE_QUALITY));
+static_assert(static_cast<uint32_t>(FfxNssShaderQualityMode::FFX_NSS_SHADER_QUALITY_MODE_BALANCED) ==
+              static_cast<uint32_t>(FfxApiNssShaderQualityMode::FFX_API_NSS_SHADER_QUALITY_MODE_BALANCED));
+static_assert(static_cast<uint32_t>(FfxNssShaderQualityMode::FFX_NSS_SHADER_QUALITY_MODE_PERFORMANCE) ==
+              static_cast<uint32_t>(FfxApiNssShaderQualityMode::FFX_API_NSS_SHADER_QUALITY_MODE_PERFORMANCE));
+
 static uint32_t ConvertContextFlagsNss(uint32_t apiFlags)
 {
     uint32_t outFlags = 0;
@@ -48,18 +55,22 @@ static uint32_t ConvertContextFlagsNss(uint32_t apiFlags)
         outFlags |= FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC)
         outFlags |= FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT)
         outFlags |= FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_MANAGE_HISTORY)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT;
     return outFlags;
 }
 
 static uint32_t ConvertDispatchFlagsNss(uint32_t apiFlags)
 {
     uint32_t outFlags = 0;
+    if (apiFlags & FFX_API_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING)
+        outFlags |= FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING;
     if (apiFlags & FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW)
         outFlags |= FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW;
     return outFlags;
@@ -115,15 +126,19 @@ ffxReturnCode_t ffxProvider_Nss::CreateContext(ffxContext* context, ffxCreateCon
 
         FfxNssContextDescription initializationParameters = {};
         initializationParameters.backendInterface         = internal_context->backendInterface;
-        initializationParameters.maxRenderSize.width      = desc->maxRenderSize.width;
-        initializationParameters.maxRenderSize.height     = desc->maxRenderSize.height;
-        initializationParameters.maxUpscaleSize.width     = desc->maxUpscaleSize.width;
-        initializationParameters.maxUpscaleSize.height    = desc->maxUpscaleSize.height;
+        initializationParameters.renderSize.width         = desc->maxRenderSize.width;
+        initializationParameters.renderSize.height        = desc->maxRenderSize.height;
+        initializationParameters.upscaleSize.width        = desc->maxUpscaleSize.width;
+        initializationParameters.upscaleSize.height       = desc->maxUpscaleSize.height;
 
         initializationParameters.displaySize.width  = desc->maxUpscaleSize.width;
         initializationParameters.displaySize.height = desc->maxUpscaleSize.height;
 
-        initializationParameters.qualityMode = ConvertEnum<FfxNssShaderQualityMode>(desc->qualityMode);
+        const FfxApiNssShaderQualityMode qualityMode =
+            (desc->qualityMode >= FFX_API_NSS_SHADER_QUALITY_MODE_QUALITY && desc->qualityMode <= FFX_API_NSS_SHADER_QUALITY_MODE_PERFORMANCE)
+                ? desc->qualityMode
+                : FFX_API_NSS_SHADER_QUALITY_MODE_BALANCED;
+        initializationParameters.qualityMode = ConvertEnum<FfxNssShaderQualityMode>(qualityMode);
         initializationParameters.flags       = ConvertContextFlagsNss(desc->flags);
         // Calling this casted function is undefined behaviour, but it's probably safe.
         initializationParameters.fpMessage = reinterpret_cast<FfxNssMessage>(desc->fpMessage);
@@ -209,6 +224,15 @@ ffxReturnCode_t ffxProvider_Nss::Query(ffxContext* context, ffxQueryDescHeader* 
         }
         break;
     }
+    case FFX_API_QUERY_DESC_TYPE_NSS_GETPIPELINESTAGEINFO:
+    {
+        VERIFY(context, FFX_API_RETURN_ERROR_PARAMETER);
+        VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
+        InternalNssContext* internal_context = reinterpret_cast<InternalNssContext*>(*context);
+        auto                desc             = reinterpret_cast<ffxApiQueryDescNssGetPipelineStageInfo*>(header);
+        TRY2(ffxNssGetPipelineStageInfo(&internal_context->context, desc->pOutPreProcessUsesFragment, desc->pOutPostProcessUsesFragment));
+        break;
+    }
     default:
         return FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE;
     }
@@ -238,6 +262,7 @@ ffxReturnCode_t ffxProvider_Nss::Dispatch(ffxContext* context, const ffxDispatch
         dispatchParameters.commandList               = desc->commandList;
         dispatchParameters.color                     = Convert(desc->color);
         dispatchParameters.depth                     = Convert(desc->depth);
+        dispatchParameters.outputTm1                 = Convert(desc->outputTm1);
         dispatchParameters.motionVectors             = Convert(desc->motionVectors);
         dispatchParameters.output                    = Convert(desc->output);
         dispatchParameters.jitterOffset.x            = desc->jitterOffset.x;
@@ -255,6 +280,11 @@ ffxReturnCode_t ffxProvider_Nss::Dispatch(ffxContext* context, const ffxDispatch
         dispatchParameters.renderSize.width          = desc->renderSize.width;
         dispatchParameters.renderSize.height         = desc->renderSize.height;
         dispatchParameters.flags                     = ConvertDispatchFlagsNss(desc->flags);
+        if (desc->flags & FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW)
+        {
+            dispatchParameters.debugViews    = Convert(desc->debugViews);
+            dispatchParameters.debugViewMode = desc->debugViewMode;
+        }
 
         TRY2(ffxNssContextDispatch(&internal_context->context, &dispatchParameters));
         break;

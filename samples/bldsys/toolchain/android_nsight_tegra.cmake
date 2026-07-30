@@ -1,5 +1,5 @@
 #[[
- Copyright (c) 2022, Arm Limited and Contributors
+ Copyright (c) 2022,2026, Arm Limited and Contributors
 
  SPDX-License-Identifier: Apache-2.0
 
@@ -60,7 +60,7 @@ set(CMAKE_ANDROID_SKIP_ANT_STEP 0)
 set(CMAKE_GENERATOR_TOOLSET DefaultClang)
 
 # Tell CMake we have our java source in the 'java' directory
-set(CMAKE_ANDROID_JAVA_SOURCE_DIR ${CMAKE_SOURCE_DIR}/bldsys/android/vulkan_samples/src/main/java)
+set(CMAKE_ANDROID_JAVA_SOURCE_DIR ${SAMPLES_ROOT}/bldsys/android/vulkan_samples/src/main/java)
 
 # Tell CMake we have use Gradle as our default build system
 set(CMAKE_ANDROID_BUILD_SYSTEM GradleBuild)

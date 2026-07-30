@@ -1,3 +1,21 @@
+# Public v1.1.0 Release Notes
+Arm® Neural Graphics SDK for Game Engines public v1.1.0 introduces Neural Frame Rate Upscaling (NFRU), expands platform support, and delivers significant improvements in image quality, performance, stability, and developer tooling.
+
+## New Features
+- Added support for Neural Frame Rate Upscaling (NFRU), a neural-assisted frame interpolation technology that increases perceived frame rate by generating intermediate frames between rendered frames. The system combines engine‑provided motion vectors, optical‑flow‑derived correspondence fields, and a neural network model to produce temporally consistent and visually smooth results.
+- Added Android™ (AArch64) support for NSS and NFRU on supported Arm GPU platforms.
+- Added a Vulkan layer to simplify SDK integration and validation.
+- Added NFRU sample code and a dataset replayer to accelerate development and testing workflows.
+- Restructured NSS sample code and reduced the library size.
+- Added fragment-pass support for both NSS and NFRU.
+
+## Improvements
+- Upgraded the Neural Super Sampling (NSS) algorithm to improve image quality, reduce Neural Engine bandwidth consumption, and provide quality/balanced/performance presets for different performance and quality targets.
+- Added new debugging and visualization capabilities for NSS and NFRU.
+- Added additional API configuration controls for NFRU.
+- Optimized memory bandwidth usage and overall runtime performance across the SDK.
+- Improved SDK stability and fixed multiple reliability issues.
+
 # Public v1.0.1 Release Notes
 
 - Added sample code for Neural Super Sampling (NSS), the following platform combinations are supported:
@@ -39,14 +57,12 @@ Windows® 11 - x86-64
 
 This is a Vulkan focused delivery so the sdk only supports the Vulkan backend.
 
-To run the SDK on devices that do not support ML extensions for Vulkan, the ML Emulation Layer for Vulkan needs to be enabled. Details can be found in [README.md](/README.md#Vulkan-emulation-layer). Please note that performance based on the Vulkan eimulation layer does not represent the performance on actual devices.
+To run the SDK on devices that do not support ML extensions for Vulkan, the ML Emulation Layer for Vulkan needs to be enabled. Details can be found in [README.md](/README.md#Vulkan-emulation-layer). Please note that performance based on the Vulkan emulation layer does not represent the performance on actual devices.
 
 # Documentation and resources
 
 SDK readme can be found in [README.md](/README.md).
 
-NSS readme can be found in [NSS.md](/docs/NSS/NSS.md).
-
-RenderDoc which support ML extensions for Vulkan can be downloaded from [Arm developer](https://developer.arm.com/Tools%20and%20Software/RenderDoc%20for%20Arm%20GPUs).
+RenderDoc which supports ML extensions for Vulkan can be downloaded from [Arm developer](https://developer.arm.com/Tools%20and%20Software/RenderDoc%20for%20Arm%20GPUs).
 
 Vulkan Emulation layer libs will be under the release package. Source code can be found in [github](https://github.com/arm/ai-ml-emulation-layer-for-vulkan).

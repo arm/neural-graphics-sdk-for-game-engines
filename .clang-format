@@ -47,7 +47,7 @@ AlignConsecutiveMacros: true
 AlignAfterOpenBracket: true
 ---
 # We don't have objective-c files, addding this to silient the warning:
-#    Configuration file(s) do(es) not support Objective-C: ArmNG-SDK/.clang-format
+#    Configuration file(s) do(es) not support Objective-C: SDK/.clang-format
 BasedOnStyle: Google
 IndentWidth: 4
 UseTab: Never

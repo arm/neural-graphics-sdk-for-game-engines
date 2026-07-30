@@ -304,6 +304,12 @@ struct HPPType<VkPhysicalDeviceDataGraphFeaturesARM>
 };
 
 template <>
+struct HPPType<VkPhysicalDeviceDataGraphOpticalFlowFeaturesARM>
+{
+	using Type = vk::PhysicalDeviceDataGraphOpticalFlowFeaturesARM;
+};
+
+template <>
 struct HPPType<VkRenderPass>
 {
 	using Type = vk::RenderPass;

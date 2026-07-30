@@ -1,5 +1,5 @@
 #[[
- Copyright (c) 2019-2023, Arm Limited and Contributors
+ Copyright (c) 2019-2023,2026, Arm Limited and Contributors
 
  SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ set(MIN_SDK_VERSION "minSdk ${ANDROID_API}")
 
 # manifest.srcFile
 if(NOT IS_ABSOLUTE ${ANDROID_MANIFEST})
-	set(ANDROID_MANIFEST ${CMAKE_SOURCE_DIR}/${ANDROID_MANIFEST})
+	set(ANDROID_MANIFEST ${SAMPLES_ROOT}/${ANDROID_MANIFEST})
 endif()
 
 if(EXISTS ${ANDROID_MANIFEST})
@@ -85,7 +85,7 @@ set(ASSETS_LIST)
 
 foreach(ASSET_DIR ${ASSET_DIRS})
 	if(NOT IS_ABSOLUTE ${ASSET_DIR})
-		set(ASSET_DIR ${CMAKE_SOURCE_DIR}/${ASSET_DIR})
+		set(ASSET_DIR ${SAMPLES_ROOT}/${ASSET_DIR})
 	endif()
 
 	if(IS_DIRECTORY ${ASSET_DIR})
@@ -107,7 +107,7 @@ set(RES_LIST)
 
 foreach(RES_DIR ${RES_DIRS})
 	if(NOT IS_ABSOLUTE ${RES_DIR})
-		set(RES_DIR ${CMAKE_SOURCE_DIR}/${RES_DIR})
+		set(RES_DIR ${SAMPLES_ROOT}/${RES_DIR})
 	endif()
 
 	if(IS_DIRECTORY ${RES_DIR})
@@ -129,7 +129,7 @@ set(JAVA_LIST)
 
 foreach(JAVA_DIR ${JAVA_DIRS})
 	if(NOT IS_ABSOLUTE ${JAVA_DIR})
-		set(JAVA_DIR ${CMAKE_SOURCE_DIR}/${JAVA_DIR})
+		set(JAVA_DIR ${SAMPLES_ROOT}/${JAVA_DIR})
 	endif()
 
 	if(IS_DIRECTORY ${JAVA_DIR})
@@ -151,7 +151,7 @@ set(JNI_LIBS_DIR_LIST)
 
 foreach(JNI_LIBS_DIR ${JNI_LIBS_DIRS})
 	if(NOT IS_ABSOLUTE ${JNI_LIBS_DIR})
-		set(JNI_LIBS_DIR ${CMAKE_SOURCE_DIR}/${JNI_LIBS_DIR})
+		set(JNI_LIBS_DIR ${SAMPLES_ROOT}/${JNI_LIBS_DIR})
 	endif()
 
 	if(IS_DIRECTORY ${JNI_LIBS_DIR})
@@ -170,7 +170,7 @@ endif()
 
 # cmake.path
 if(NOT IS_ABSOLUTE ${NATIVE_SCRIPT})
-	set(NATIVE_SCRIPT ${CMAKE_SOURCE_DIR}/${NATIVE_SCRIPT})
+	set(NATIVE_SCRIPT ${SAMPLES_ROOT}/${NATIVE_SCRIPT})
 endif()
 
 if(EXISTS ${NATIVE_SCRIPT})

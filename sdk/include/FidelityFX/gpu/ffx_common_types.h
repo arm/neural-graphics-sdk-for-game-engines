@@ -601,6 +601,17 @@ FFX_16BIT_VECTOR(FFX_U16_t4, uint, 4);
 #define half4x3 mat4x3
 #define half4x4 mat4
 
+#define f16mat2   mat2
+#define f16mat2x3 mat2x3
+#define f16mat2x4 mat2x4
+#define f16mat3x2 mat3x2
+#define f16mat3   mat3
+#define f16mat3x4 mat3x4
+#define f16mat4x2 mat4x2
+#define f16mat4x3 mat4x3
+#define f16mat4   mat4
+#define f16mat4x4 mat4
+
 #define FFX_MIN16_F  float
 #define FFX_MIN16_F2 vec2
 #define FFX_MIN16_F3 vec3

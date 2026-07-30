@@ -86,28 +86,36 @@ enum FfxApiResourceUsage
     FFX_API_RESOURCE_USAGE_INDIRECT      = (1 << 3),  ///< Indicates a resource will be used as indirect argument buffer
     FFX_API_RESOURCE_USAGE_ARRAYVIEW     = (1 << 4),  ///< Indicates a resource that will generate array views. Works on 2D and cubemap textures
     FFX_API_RESOURCE_USAGE_STENCILTARGET = (1 << 5),  ///< Indicates a resource will be used as stencil target.
+    FFX_API_RESOURCE_USAGE_DATA_GRAPH    = (1 << 6),  ///< Indicates a resource will be used by data graph pipeline.
 };
 typedef FfxApiResourceUsage FfxApiResorceUsage;  // Corrects a typo that shipped with original API
 
 /// An enumeration of resource states.
 enum FfxApiResourceState
 {
-    FFX_API_RESOURCE_STATE_COMMON           = (1 << 0),
-    FFX_API_RESOURCE_STATE_UNORDERED_ACCESS = (1 << 1),  ///< Indicates a resource is in the state to be used as UAV.
-    FFX_API_RESOURCE_STATE_COMPUTE_READ     = (1 << 2),  ///< Indicates a resource is in the state to be read by compute shaders.
-    FFX_API_RESOURCE_STATE_PIXEL_READ       = (1 << 3),  ///< Indicates a resource is in the state to be read by pixel shaders.
+    // Match the bit positions of the internal FfxResourceStates so
+    // ConvertEnum(static_cast) yields corresponding internal flags.
+    FFX_API_RESOURCE_STATE_COMMON      = (1 << 0),
+    FFX_API_RESOURCE_STATE_COMPUTE_UAV = (1 << 1),  ///< Indicates a resource is in the state to be used as UAV in compute shaders.
+    FFX_API_RESOURCE_STATE_PIXEL_UAV   = (1 << 2),  ///< Indicates a resource is in the state to be used as UAV in pixel shaders.
+    FFX_API_RESOURCE_STATE_UNORDERED_ACCESS =
+        (FFX_API_RESOURCE_STATE_COMPUTE_UAV |
+         FFX_API_RESOURCE_STATE_PIXEL_UAV),          ///< Indicates a resource is in the state to be used as UAV in compute or pixel shaders.
+    FFX_API_RESOURCE_STATE_COMPUTE_READ = (1 << 3),  ///< Indicates a resource is in the state to be read by compute shaders.
+    FFX_API_RESOURCE_STATE_PIXEL_READ   = (1 << 4),  ///< Indicates a resource is in the state to be read by pixel shaders.
     FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ =
         (FFX_API_RESOURCE_STATE_PIXEL_READ |
          FFX_API_RESOURCE_STATE_COMPUTE_READ),    ///< Indicates a resource is in the state to be read by pixel or compute shaders.
-    FFX_API_RESOURCE_STATE_COPY_SRC  = (1 << 4),  ///< Indicates a resource is in the state to be used as source in a copy command.
-    FFX_API_RESOURCE_STATE_COPY_DEST = (1 << 5),  ///< Indicates a resource is in the state to be used as destination in a copy command.
+    FFX_API_RESOURCE_STATE_COPY_SRC  = (1 << 5),  ///< Indicates a resource is in the state to be used as source in a copy command.
+    FFX_API_RESOURCE_STATE_COPY_DEST = (1 << 6),  ///< Indicates a resource is in the state to be used as destination in a copy command.
     FFX_API_RESOURCE_STATE_GENERIC_READ =
         (FFX_API_RESOURCE_STATE_COPY_SRC | FFX_API_RESOURCE_STATE_COMPUTE_READ),  ///< Indicates a resource is in generic (slow) read state.
-    FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT = (1 << 6),   ///< Indicates a resource is in the state to be used as an indirect command argument
-    FFX_API_RESOURCE_STATE_PRESENT           = (1 << 7),   ///< Indicates a resource is in the state to be used to present to the swap chain
-    FFX_API_RESOURCE_STATE_RENDER_TARGET     = (1 << 8),   ///< Indicates a resource is in the state to be used as render target
-    FFX_API_RESOURCE_STATE_DATA_GRAPH_READ   = (1 << 9),   ///< Indicates a resource is in the state to be read by data graph
-    FFX_API_RESOURCE_STATE_DATA_GRAPH_WRITE  = (1 << 10),  ///< Indicates a resource is in the state to be written by data graph
+    FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT  = (1 << 7),   ///< Indicates a resource is in the state to be used as an indirect command argument
+    FFX_API_RESOURCE_STATE_PRESENT            = (1 << 8),   ///< Indicates a resource is in the state to be used to present to the swap chain
+    FFX_API_RESOURCE_STATE_RENDER_TARGET      = (1 << 9),   ///< Indicates a resource is in the state to be used as render target
+    FFX_API_RESOURCE_STATE_DATA_GRAPH_READ    = (1 << 10),  ///< Indicates a resource is in the state to be read by data graph
+    FFX_API_RESOURCE_STATE_DATA_GRAPH_WRITE   = (1 << 11),  ///< Indicates a resource is in the state to be written by data graph
+    FFX_API_RESOURCE_STATE_DEPTH_STENCIL_READ = (1 << 12),  ///< Indicates a resource is in the state of Depth/Stencil read
 };
 
 /// An enumeration of surface dimensions.
@@ -134,13 +142,6 @@ enum FfxApiResourceType
     FFX_API_RESOURCE_TYPE_TEXTURE_CUBE,  ///< The resource is a cube map.
     FFX_API_RESOURCE_TYPE_TEXTURE3D,     ///< The resource is a 3-dimensional texture.
     FFX_API_RESOURCE_TYPE_TENSOR,        ///< The resource is a tensor.
-};
-
-enum FfxApiBackbufferTransferFunction
-{
-    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB,
-    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ,
-    FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB
 };
 
 /// A structure encapsulating a 2-dimensional point, using 32bit unsigned integers.

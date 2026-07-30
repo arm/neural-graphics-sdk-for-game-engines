@@ -146,7 +146,14 @@ add_subdirectory(libs/tiny-process-library)
 
 set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "")
 set(SPIRV_CROSS_CLI OFF CACHE BOOL "")
+# Hide SPIRV-Cross symbols to avoid conflicts when SDK is consumed by applications
+set(SAVED_CXX_VISIBILITY_PRESET ${CMAKE_CXX_VISIBILITY_PRESET})
+set(SAVED_VISIBILITY_INLINES_HIDDEN ${CMAKE_VISIBILITY_INLINES_HIDDEN})
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 add_subdirectory(libs/SPIRV-Cross)
+set(CMAKE_CXX_VISIBILITY_PRESET ${SAVED_CXX_VISIBILITY_PRESET})
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ${SAVED_VISIBILITY_INLINES_HIDDEN})
 
 # Add link time dependencies
 target_link_libraries (${PROJECT_NAME} glslangValidator tiny-process-library spirv-cross-glsl)

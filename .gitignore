@@ -1,3 +1,4 @@
+.github/
 .vscode/
 .idea/
 *.sln
@@ -34,3 +35,13 @@ samples/.*.sw*
 samples/.sw*
 samples/.tracy
 samples/.DS_Store
+samples/assets/
+samples/third_party/*
+!samples/third_party/CMakeLists.txt
+!samples/third_party/manifest.tsv
+!samples/third_party/sparse.tsv
+cache
+imgui.ini
+.gradle/
+.android/
+result/

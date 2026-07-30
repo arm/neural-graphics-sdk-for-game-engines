@@ -1,0 +1,15 @@
+path	sparse_paths
+samples/assets	fonts;scenes/sponza
+samples/third_party/astc	Source
+samples/third_party/fmt	src;include;support
+samples/third_party/glfw	src;include;CMake;deps/wayland
+samples/third_party/glm	glm
+samples/third_party/hwcpipe	backend;hwcpipe;device;cmake;third_party
+samples/third_party/imgui	
+samples/third_party/ktx	include;lib;other_include;utils;LICENSES;external/basisu/encoder;external/basisu/transcoder;external/basisu/zstd;external/dfdutils;external/etcdec;external/lodepng
+samples/third_party/spdlog	src;include;cmake
+samples/third_party/stb	
+samples/third_party/tinygltf	
+samples/third_party/tracy	public
+samples/third_party/vma	include
+samples/third_party/volk	

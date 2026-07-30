@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #version 460
 #extension GL_EXT_samplerless_texture_functions : require
 #extension GL_GOOGLE_include_directive : require
+#if NSS_SUPPORT_TENSOR
 #extension GL_ARM_tensors : require
+#endif
 
 #if FFX_HALF
 #extension GL_EXT_shader_8bit_storage : require
@@ -15,28 +17,27 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float32 : require
 #endif
 
-#define NSS_BIND_CONSTANT_KERNEL_LUT 1
-
+//-----------------------------------------------------------------------------
+// Input: SRV bindings
+//-----------------------------------------------------------------------------
 #define NSS_BIND_SRV_INPUT_COLOR_JITTERED               0    // FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR
 #define NSS_BIND_SRV_INPUT_MOTION_VECTORS               1    // FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS
 #define NSS_BIND_SRV_HISTORY_UPSCALED_COLOR             2    // FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR
-#define NSS_BIND_SRV_K0_TENSOR                          3    // FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR
-#define NSS_BIND_SRV_K1_TENSOR                          4    // FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR
-#define NSS_BIND_SRV_K2_TENSOR                          5    // FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR
-#define NSS_BIND_SRV_K3_TENSOR                          6    // FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR
-#define NSS_BIND_SRV_K4_TENSOR                          7    // FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR
-#define NSS_BIND_SRV_NEAREST_DEPTH_COORD                8    // FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD
-#define NSS_BIND_UAV_UPSCALED_OUTPUT                    9    // FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT
-#define NSS_BIND_UAV_UNPADDED_OUTPUT                    10   // FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT
+#define NSS_BIND_KPN_TENSOR                             3    // FFX_NSS_RESOURCE_IDENTIFIER_KPN_TENSOR
+#define NSS_BIND_SRV_FEEDBACK_TENSOR                    4    // FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR
+#define NSS_BIND_SRV_NEAREST_DEPTH_COORD                5    // FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD
+#define NSS_BIND_SRV_OFFSET_LUT                         6   // FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT
 
-#define NSS_BIND_CB_NSS                                 11
+//-----------------------------------------------------------------------------
+// Output: UAV bindings
+//-----------------------------------------------------------------------------
+#define NSS_BIND_UAV_UPSCALED_OUTPUT                    7    // FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT
+#define NSS_BIND_UAV_HISTORY_UPSCALED_COLOR             8   // FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR
 
-// settings
-#ifndef HISTORY_CATMULL
-#define HISTORY_CATMULL
-#endif
+#define NSS_BIND_CB_NSS                                 9
 
-#include "nss/ffx_nss_callbacks_glsl.h"
+#define NSS_POSTPROCESS 1
+
 #include "nss/ffx_nss_postprocess.h"
 
 #ifndef FFX_NSS_NUM_THREADS

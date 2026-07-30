@@ -1,4 +1,5 @@
-/* Copyright (c) 2023, Thomas Atkinson
+/* Copyright (c) 2026, Arm Limited and Contributors
+ * Copyright (c) 2023, Thomas Atkinson
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -31,6 +32,6 @@ UnixPlatformContext::UnixPlatformContext(int argc, char **argv) :
 
 	const char *env_temp_dir    = std::getenv("TMPDIR");
 	_temp_directory             = env_temp_dir ? std::string(env_temp_dir) + "/" : "/tmp/";
-	_external_storage_directory = "";
+	_external_storage_directory = find_samples_root();
 }
 }        // namespace vkb

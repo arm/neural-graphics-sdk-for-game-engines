@@ -26,11 +26,11 @@ add_sample(
     NAME "NSS"
     DESCRIPTION "Neural Super Sampling"
     SHADER_FILES_GLSL
-        "nss/jitter.vert"
-        "nss/velocity.frag"
-        "nss/postprocessing.vert"
-        "nss/display.frag"
+        "temporal/jitter.vert"
+        "temporal/velocity.frag"
+        "postprocessing.vert"
+        "display.frag"
 )
 
-# NSS SDK headers + libraries are provided transitively by the `framework` target.
-# See: samples/framework/CMakeLists.txt#L481-L519 (ARM NG-SDK include dirs + NSS SDK linkage).
+# SDK headers + libraries are provided transitively by the `framework` target.
+# See: samples/framework/CMakeLists.txt#L481-L540 (SDK include dirs + SDK linkage).

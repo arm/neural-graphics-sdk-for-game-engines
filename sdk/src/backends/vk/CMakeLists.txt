@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 if(NOT ${FFX_API_VK})
@@ -58,6 +58,7 @@ set(PRIVATE_SHADERS "")
 
 file(GLOB PRIVATE_SOURCE
     "${FFX_SHARED_PATH}/ffx_assert.cpp"
+    "${FFX_SHARED_PATH}/ffx_util.cpp"
 	"${FFX_SRC_BACKENDS_PATH}/shared/*.h"
 	"${FFX_SRC_BACKENDS_PATH}/shared/*.cpp"
 	"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/"
@@ -65,6 +66,34 @@ file(GLOB PRIVATE_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
+
+if (FFX_FI OR FFX_ALL)
+	#if(WIN32)
+		file(GLOB FRAME_INTERPOLATION_SWAPCHAIN_SRC
+			"${CMAKE_CURRENT_SOURCE_DIR}/FrameInterpolationSwapchain/*.h"
+			"${CMAKE_CURRENT_SOURCE_DIR}/FrameInterpolationSwapchain/*.cpp"
+		)
+		list(APPEND PRIVATE_SOURCE ${FRAME_INTERPOLATION_SWAPCHAIN_SRC})
+	#endif()
+endif()
+
+if (FFX_FI OR FFX_ALL)
+	set(FFX_FI_PRIVATE_SOURCE
+		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_frameinterpolation_shaderblobs.h"
+		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_frameinterpolation_shaderblobs.cpp")
+	list(APPEND PRIVATE_SOURCE ${FFX_FI_PRIVATE_SOURCE})
+
+	# Add shaders for Frame Interpolation
+
+	file(GLOB FFX_FI_PRIVATE_SHADERS
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/frameinterpolation/*.glsl")
+	list(APPEND PRIVATE_SHADERS ${FFX_FI_PRIVATE_SHADERS})
+
+	file(GLOB FFX_FI_PUBLIC_SHADERS
+		"${FFX_GPU_PATH}/frameinterpolation/*.h"
+		"${FFX_GPU_PATH}/frameinterpolation/*.glsl")
+	list(APPEND PUBLIC_SHADERS ${FFX_FI_PUBLIC_SHADERS})
+endif()
 
 if (FFX_NSS OR FFX_ALL)
 	set(FFX_NSS_PRIVATE_SOURCE
@@ -75,18 +104,35 @@ if (FFX_NSS OR FFX_ALL)
 	# Add shaders for nss
 	
 	file(GLOB FFX_NSS_PRIVATE_SHADERS
-		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/nss/*.glsl"
-		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/nss/*.comp")
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/nss/*.glsl")
 	list(APPEND PRIVATE_SHADERS ${FFX_NSS_PRIVATE_SHADERS})
 	
 	file(GLOB FFX_NSS_PUBLIC_SHADERS
 		"${FFX_GPU_PATH}/nss/*.h"
-		"${FFX_GPU_PATH}/nss/*.glsl"
-		"${FFX_GPU_PATH}/nss/*.comp")
+		"${FFX_GPU_PATH}/nss/*.glsl")
 	list(APPEND PUBLIC_SHADERS ${FFX_NSS_PUBLIC_SHADERS})
 endif()
 
-include_directories("${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
+if (FFX_OF OR FFX_ALL)
+	set(ARM_OF_PRIVATE_SOURCE
+		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_opticalflow_shaderblobs.h"
+		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_opticalflow_shaderblobs.cpp")
+	list(APPEND PRIVATE_SOURCE ${ARM_OF_PRIVATE_SOURCE})
+
+	# Add shaders for Arm Optical Flow
+
+	file(GLOB ARM_OF_PRIVATE_SHADERS
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/opticalflow/*.glsl"
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/opticalflow/*.comp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/opticalflow/*.frag"
+		"${CMAKE_CURRENT_SOURCE_DIR}/shaders/opticalflow/*.vert")
+	list(APPEND PRIVATE_SHADERS ${ARM_OF_PRIVATE_SHADERS})
+
+	file(GLOB ARM_OF_PUBLIC_SHADERS
+		"${FFX_GPU_PATH}/opticalflow/*.h"
+		"${FFX_GPU_PATH}/opticalflow/*.glsl")
+	list(APPEND PUBLIC_SHADERS ${ARM_OF_PUBLIC_SHADERS})
+endif()
 
 file(GLOB_RECURSE PUBLIC_SOURCE
     "${FFX_HOST_BACKENDS_PATH}/vk/*.h")
@@ -109,7 +155,6 @@ target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE
 
 # Depend on vulkan-headers in the sdk/include folder to ensure that the Vulkan headers are available.
 target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PUBLIC "${Vulkan_INCLUDE_DIR}")
-target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE "Vulkan::Vulkan")
 
 # vk backend source
 source_group("private_source"  FILES ${PRIVATE_SOURCE})
@@ -139,7 +184,7 @@ else()
       "${CMAKE_BINARY_DIR}/ffx_shaders"
       CACHE PATH "" FORCE)
   set(FFX_PASS_DATA_GRAPH_OUTPUT_PATH
-      "${CMAKE_BINARY_DIR}/ffx_shaders"
+      "${CMAKE_BINARY_DIR}/ffx_graphs"
       CACHE PATH "" FORCE)
 
   file(MAKE_DIRECTORY "${FFX_PASS_SHADER_OUTPUT_PATH}")
@@ -167,10 +212,21 @@ if (FFX_AUTO_COMPILE_SHADERS)
 else()
     set(FFX_SC_DEPENDENT_TARGET ffx_backend_vk_shaders_${FFX_PLATFORM_NAME})
     add_custom_target(${FFX_SC_DEPENDENT_TARGET})
+    #add_dependencies(ffx_backend_vk_${FFX_PLATFORM_NAME} ${FFX_SC_DEPENDENT_TARGET})
 endif()
 
 if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.20.0")
 	cmake_policy(SET CMP0116 OLD)
+endif()
+
+if (FFX_FI OR FFX_ALL)
+	target_compile_definitions(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE FFX_FI)
+	include (CMakeShadersArmFrameinterpolation.txt)
+endif()
+
+if (FFX_OF OR FFX_ALL)
+	target_compile_definitions(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE FFX_OF)
+	include (CMakeShadersOpticalflow.txt)
 endif()
 
 if (FFX_NSS OR FFX_ALL)

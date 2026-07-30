@@ -378,12 +378,6 @@ set(SPDLOG_FMT_EXTERNAL ON)
 add_subdirectory(spdlog)
 set_property(TARGET spdlog PROPERTY FOLDER "ThirdParty")
 
-# OpenCL
-add_library(opencl INTERFACE)
-set(OPENCL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencl)
-target_sources(opencl INTERFACE ${OPENCL_INCLUDE_DIR}/CL/opencl.h)
-target_include_directories(opencl SYSTEM INTERFACE ${OPENCL_INCLUDE_DIR})
-
 # Tracy
 if (VKB_PROFILING)
     set(TRACY_ENABLE ${VKB_PROFILING})

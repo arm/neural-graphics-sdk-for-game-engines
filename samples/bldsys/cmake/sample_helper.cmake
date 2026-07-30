@@ -1,5 +1,5 @@
 #[[
- Copyright (c) 2019-2025, Arm Limited and Contributors
+ Copyright (c) 2019-2026, Arm Limited and Contributors
  Copyright (c) 2024-2025, Mobica Limited
  Copyright (c) 2024-2025, Sascha Willems
 
@@ -233,7 +233,7 @@ endif()
                 COMMAND ${Vulkan_dxc_EXECUTABLE} -spirv -T ${DXC_PROFILE} -E main ${TARGET_DXC_ADDITIONAL_ARGUMENTS} ${SHADER_FILE_HLSL} -Fo ${OUTPUT_FILE}
                 COMMAND ${CMAKE_COMMAND} -E copy ${OUTPUT_FILE} ${directory}
                 MAIN_DEPENDENCY ${SHADER_FILE_HLSL}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${SAMPLES_ROOT}
             )
             list(APPEND OUTPUT_FILES ${OUTPUT_FILE})
             set_source_files_properties(${OUTPUT_FILE} PROPERTIES
@@ -265,7 +265,7 @@ endif()
                 COMMAND ${Vulkan_slang_EXECUTABLE} ${SHADER_FILE_SLANG} -profile ${SLANG_PROFILE} -matrix-layout-column-major -target spirv -o ${OUTPUT_FILE} -entry ${SLANG_ENTRY_POINT}
                 COMMAND ${CMAKE_COMMAND} -E copy ${OUTPUT_FILE} ${directory}
                 MAIN_DEPENDENCY ${SHADER_FILE_SLANG}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${SAMPLES_ROOT}
             )
             list(APPEND OUTPUT_FILES ${OUTPUT_FILE})
             set_source_files_properties(${OUTPUT_FILE} PROPERTIES
@@ -295,10 +295,10 @@ endif()
             file(MAKE_DIRECTORY ${OUTPUT_DIR})
             add_custom_command(
                 OUTPUT ${OUTPUT_FILE}
-                COMMAND ${Vulkan_glslc_EXECUTABLE} ${SHADER_FILE_GLSL} -o ${OUTPUT_FILE} -I "${CMAKE_SOURCE_DIR}/shaders/includes/glsl" ${TARGET_GLSLC_ADDITIONAL_ARGUMENTS}
+                COMMAND ${Vulkan_glslc_EXECUTABLE} ${SHADER_FILE_GLSL} -o ${OUTPUT_FILE} -I "${SAMPLES_ROOT}/shaders/includes/glsl" ${TARGET_GLSLC_ADDITIONAL_ARGUMENTS}
                 COMMAND ${CMAKE_COMMAND} -E copy ${OUTPUT_FILE} ${directory}
                 MAIN_DEPENDENCY ${SHADER_FILE_GLSL}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${SAMPLES_ROOT}
             )
             list(APPEND OUTPUT_FILES ${OUTPUT_FILE})
             set_source_files_properties(${OUTPUT_FILE} PROPERTIES

@@ -1,4 +1,4 @@
-/* Copyright (c) 2019-2025, Arm Limited and Contributors
+/* Copyright (c) 2019-2026, Arm Limited and Contributors
  * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -84,6 +84,7 @@ class Subpass
 {
 	using ResolveModeFlagBitsType = typename std::conditional<bindingType == vkb::BindingType::Cpp, vk::ResolveModeFlagBits, VkResolveModeFlagBits>::type;
 	using SampleCountflagBitsType = typename std::conditional<bindingType == vkb::BindingType::Cpp, vk::SampleCountFlagBits, VkSampleCountFlagBits>::type;
+	using Extent2DType            = typename std::conditional<bindingType == vkb::BindingType::Cpp, vk::Extent2D, VkExtent2D>::type;
 
 	using DepthStencilStateType =
 	    typename std::conditional<bindingType == vkb::BindingType::Cpp, vkb::rendering::HPPDepthStencilState, vkb::DepthStencilState>::type;
@@ -132,6 +133,7 @@ class Subpass
 	LightingState<bindingType>                                &get_lighting_state();
 	const std::vector<uint32_t>                               &get_output_attachments() const;
 	RenderContextType                                         &get_render_context();
+	const Extent2DType                                        &get_render_target_extent() const;
 	std::unordered_map<std::string, ShaderResourceMode> const &get_resource_mode_map() const;
 	SampleCountflagBitsType                                    get_sample_count() const;
 	const ShaderSource                                        &get_vertex_shader() const;
@@ -187,6 +189,9 @@ class Subpass
 	std::vector<uint32_t> output_attachments = {0};
 
 	vkb::rendering::HPPRenderContext &render_context;
+
+	/// Cached each time update_render_target_attachments() is called by the RenderPipeline.
+	Extent2DType render_target_extent{};
 
 	// A map of shader resource names and the mode of constant data
 	std::unordered_map<std::string, ShaderResourceMode> resource_mode_map;
@@ -259,6 +264,12 @@ inline typename vkb::rendering::Subpass<bindingType>::RenderContextType &Subpass
 	{
 		return reinterpret_cast<vkb::RenderContext &>(render_context);
 	}
+}
+
+template <vkb::BindingType bindingType>
+inline const typename Subpass<bindingType>::Extent2DType &Subpass<bindingType>::get_render_target_extent() const
+{
+	return render_target_extent;
 }
 
 template <vkb::BindingType bindingType>
@@ -481,6 +492,7 @@ inline void Subpass<bindingType>::set_sample_count(SampleCountflagBitsType sampl
 template <vkb::BindingType bindingType>
 inline void Subpass<bindingType>::update_render_target_attachments(RenderTargetType &render_target)
 {
+	render_target_extent = render_target.get_extent();
 	render_target.set_input_attachments(input_attachments);
 	render_target.set_output_attachments(output_attachments);
 }

@@ -2,7 +2,7 @@ plugins {
 	id 'com.android.application'
 }
 
-ext.vvl_version='1.4.321.0'
+ext.vvl_version='1.4.350.0'
 apply from: "./download_vvl.gradle"
 
 android {

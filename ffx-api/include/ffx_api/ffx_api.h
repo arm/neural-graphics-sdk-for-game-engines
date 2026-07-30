@@ -81,7 +81,7 @@ enum FfxApiMsgType
     FFX_API_MESSAGE_TYPE_COUNT
 };
 
-typedef void (*ffxApiMessage)(uint32_t type, const wchar_t* message);
+typedef void (*ffxApiMessage)(uint32_t type, const char* message);
 
 #define FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1 0x0000001u
 struct ffxConfigureDescGlobalDebug1

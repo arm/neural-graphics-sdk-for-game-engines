@@ -69,6 +69,7 @@ set(FRAMEWORK_FILES
 
 set(COMMON_FILES
     # Header Files
+    common/app_argument_reader.h
     common/ktx_common.h
     common/vk_common.h
     common/vk_initializers.h
@@ -128,11 +129,13 @@ set(RENDERING_FILES
 set(RENDERING_SUBPASSES_FILES
     # Header files
     rendering/subpasses/forward_subpass.h
+    rendering/subpasses/temporal_forward_subpass.h
     rendering/subpasses/lighting_subpass.h
     rendering/subpasses/geometry_subpass.h
     rendering/subpasses/hpp_forward_subpass.h
     # Source files
     rendering/subpasses/forward_subpass.cpp
+    rendering/subpasses/temporal_forward_subpass.cpp
     rendering/subpasses/lighting_subpass.cpp
     rendering/subpasses/geometry_subpass.cpp)
 
@@ -478,43 +481,65 @@ endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC $<TARGET_PROPERTY:plugins,INCLUDE_DIRECTORIES> ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ARM NG-SDK headers are part of this repository and are used by SDK-facing samples.
+# NGSDK headers are part of this repository and are used by SDK-facing samples.
 # Put them on the framework target so every sample (which links against framework)
 # inherits them without per-sample CMake tweaks.
-get_filename_component(ARM_NG_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(NGSDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-    ${ARM_NG_SDK_ROOT}/sdk/include
-    ${ARM_NG_SDK_ROOT}/ffx-api/include/ffx_api)
+    ${NGSDK_ROOT}/sdk/include
+    ${NGSDK_ROOT}/ffx-api/include/ffx_api)
 
-# NSS SDK linkage
-# NSS sample uses prebuilt binaries shipped under armng-sdk/bin.
-if(WIN32)
+# SDK linkage
+# Joint build (FFX_BUILD_SAMPLES=ON from the root CMakeLists) or standalone (prebuilt bin/).
+if(DEFINED FFX_PLATFORM_NAME AND TARGET ${SDK_LIB_NAME})
+    message(STATUS "NSS SDK: joint build — linking framework against cmake targets (${FFX_PLATFORM_NAME})")
     target_link_libraries(${PROJECT_NAME} PUBLIC
-        "${ARM_NG_SDK_ROOT}/bin/ngsdk_windows_x64$<$<CONFIG:Debug>:d>.lib"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/ffx_backend_vk_windows_x64$<$<CONFIG:Debug>:d>.lib"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/ffx_nss_windows_x64$<$<CONFIG:Debug>:d>.lib"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/SPIRV-Tools$<$<CONFIG:Debug>:d>.lib"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/SPIRV-Tools-opt$<$<CONFIG:Debug>:d>.lib")
-elseif(ANDROID)
-    target_link_libraries(${PROJECT_NAME} PUBLIC
-        "${ARM_NG_SDK_ROOT}/bin/libngsdk_android_arm$<$<CONFIG:Debug>:d>.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libffx_backend_vk_android_arm$<$<CONFIG:Debug>:d>.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libffx_nss_android_arm$<$<CONFIG:Debug>:d>.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libSPIRV-Tools$<$<CONFIG:Debug>:d>.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libSPIRV-Tools-opt$<$<CONFIG:Debug>:d>.a")
-elseif(UNIX)
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-        set(_linux_arch arm)
-    else()
-        set(_linux_arch x64)
+        ngsdk_${FFX_PLATFORM_NAME}
+        ffx_backend_vk_${FFX_PLATFORM_NAME}
+        ffx_nss_${FFX_PLATFORM_NAME}
+        ffx_frameinterpolation_${FFX_PLATFORM_NAME}
+        ffx_opticalflow_${FFX_PLATFORM_NAME}
+        SPIRV-Tools-opt
+        SPIRV-Tools)
+else()
+    message(STATUS "NSS SDK: standalone build — linking framework against prebuilt binaries in bin/")
+
+    # Derive FFX_PLATFORM_NAME for standalone builds (not set by root CMakeLists)
+    if(NOT DEFINED FFX_PLATFORM_NAME)
+        if(WIN32)
+            set(FFX_PLATFORM_NAME windows_x64)
+        elseif(ANDROID)
+            set(FFX_PLATFORM_NAME android_arm)
+        elseif(UNIX)
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+                set(FFX_PLATFORM_NAME linux_arm)
+            else()
+                set(FFX_PLATFORM_NAME linux_x64)
+            endif()
+        endif()
     endif()
 
+    # Platform-specific library naming: prefix ("lib" on Unix) and extension
+    if(WIN32)
+        set(_lib_prefix "")
+        set(_lib_ext    ".lib")
+    else()
+        set(_lib_prefix "lib")
+        set(_lib_ext    ".a")
+    endif()
+
+    # Prebuilt binaries are shipped as Debug ("d" postfix) and Release (no postfix).
+    set(_cfg_postfix "$<$<CONFIG:Debug>:d>")
+    set(NGSDK_FFX_SDK_LIB_DIR "${NGSDK_ROOT}/bin/ffx_sdk/${FFX_PLATFORM_NAME}")
+
     target_link_libraries(${PROJECT_NAME} PUBLIC
-        "${ARM_NG_SDK_ROOT}/bin/libngsdk_linux_${_linux_arch}.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libffx_backend_vk_linux_${_linux_arch}.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libffx_nss_linux_${_linux_arch}.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libSPIRV-Tools.a"
-        "${ARM_NG_SDK_ROOT}/bin/ffx_sdk/libSPIRV-Tools-opt.a")
+        "${NGSDK_ROOT}/bin/${_lib_prefix}ngsdk_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_backend_vk_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_nss_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_frameinterpolation_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_opticalflow_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}SPIRV-Tools-opt${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}SPIRV-Tools${_cfg_postfix}${_lib_ext}")
 endif()
 
 # Link third party libraries

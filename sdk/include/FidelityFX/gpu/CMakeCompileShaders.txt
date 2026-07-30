@@ -20,11 +20,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 
-# Function to compile a VulkanML data graph
+# Function to compile a data graph for ML extensions for Vulkan
 #
 # EXECUTABLE			Path to the Arm Model Parser
 # BASE_ARGS				The base arguments for the compiler.
@@ -46,19 +46,29 @@ function(compile_data_graphs
 	message(STATUS "DATA_GRAPH_FILES=${DATA_GRAPH_FILES}")
 	message(STATUS "PERMUTATION_OUTPUTS=${PERMUTATION_OUTPUTS}")
 
+	# Compute a single header base for outputs: prefer binary-relative when
+	# the OUTPUT_PATH is inside the build tree so Makefile targets and depfiles
+	# use the same relative form.
+	file(RELATIVE_PATH _dg_path_rel ${CMAKE_BINARY_DIR} ${OUTPUT_PATH})
+	if(OUTPUT_PATH MATCHES "^${CMAKE_BINARY_DIR}")
+		set(_OUTPUT_PATH_FOR_HEADERS "${_dg_path_rel}")
+	else()
+		set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
+	endif()
+
 	foreach(PASS_DATA_GRAPH ${DATA_GRAPH_FILES})
 		get_filename_component(PASS_DATA_GRAPH_FILENAME ${PASS_DATA_GRAPH} NAME_WE)
 		get_filename_component(PASS_DATA_GRAPH_TARGET ${PASS_DATA_GRAPH} NAME_WLE)
 
-		set(DATA_GRAPH_HEADER ${OUTPUT_PATH}/${PASS_DATA_GRAPH_TARGET}.h)
+		set(DATA_GRAPH_HEADER_REL "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_DATA_GRAPH_TARGET}.h")
 
 		add_custom_command(
-			OUTPUT ${DATA_GRAPH_HEADER}
+			OUTPUT ${DATA_GRAPH_HEADER_REL}
 			COMMAND "${EXECUTABLE}" -output="${OUTPUT_PATH}" "${PASS_DATA_GRAPH}"
 			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 			DEPENDS ${PASS_DATA_GRAPH}
 		)
-		list(APPEND _PERMUTATION_OUTPUTS ${DATA_GRAPH_HEADER})
+		list(APPEND _PERMUTATION_OUTPUTS ${DATA_GRAPH_HEADER_REL})
 
 	endforeach(PASS_DATA_GRAPH)
 	set(${PERMUTATION_OUTPUTS} ${_PERMUTATION_OUTPUTS} PARENT_SCOPE)
@@ -116,12 +126,22 @@ function(compile_shaders_with_depfile
 		list(APPEND COMPILE_INCLUDE_ARGS "-I${INCLUDE_SPACE}${INC}")
 	endforeach(INC)
 
+	# Compute a single header base for shader outputs; prefer binary-relative
+	# when the OUTPUT_PATH is inside the build tree so generated Makefile
+	# targets and depfiles use the same form.
+	file(RELATIVE_PATH _out_path_rel ${CMAKE_BINARY_DIR} ${OUTPUT_PATH})
+	if(OUTPUT_PATH MATCHES "^${CMAKE_BINARY_DIR}")
+		set(_OUTPUT_PATH_FOR_HEADERS "${_out_path_rel}")
+	else()
+		set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
+	endif()
+
 	foreach(PASS_SHADER ${SHADER_FILES})
 		get_filename_component(PASS_SHADER_FILENAME ${PASS_SHADER} NAME_WE)
 		get_filename_component(PASS_SHADER_TARGET ${PASS_SHADER} NAME_WLE)
 
-		set(WAVE32_PERMUTATION_HEADER ${OUTPUT_PATH}/${PASS_SHADER_TARGET}_permutations.h)
-		set(WAVE32_16BIT_PERMUTATION_HEADER ${OUTPUT_PATH}/${PASS_SHADER_TARGET}_16bit_permutations.h)
+		set(WAVE32_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_permutations.h")
+		set(WAVE32_16BIT_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_16bit_permutations.h")
 
 		# combine base and permutation args
 		set(SC_ARGS ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})
@@ -147,8 +167,7 @@ function(compile_shaders_with_depfile
 		list(APPEND _PERMUTATION_OUTPUTS ${WAVE32_16BIT_PERMUTATION_HEADER})
 
 		if (SUPPORT_WAVE64)
-			# Wave64
-			set(WAVE64_PERMUTATION_HEADER ${OUTPUT_PATH}/${PASS_SHADER_TARGET}_wave64_permutations.h)
+			set(WAVE64_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_wave64_permutations.h")
 
 			add_custom_command(
 				OUTPUT ${WAVE64_PERMUTATION_HEADER}
@@ -160,7 +179,7 @@ function(compile_shaders_with_depfile
 			list(APPEND _PERMUTATION_OUTPUTS ${WAVE64_PERMUTATION_HEADER})
 
 			# Wave64 16-bit
-			set(WAVE64_16BIT_PERMUTATION_HEADER ${OUTPUT_PATH}/${PASS_SHADER_TARGET}_wave64_16bit_permutations.h)
+			set(WAVE64_16BIT_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_wave64_16bit_permutations.h")
 
 			add_custom_command(
 				OUTPUT ${WAVE64_16BIT_PERMUTATION_HEADER}
@@ -174,6 +193,69 @@ function(compile_shaders_with_depfile
 	endforeach(PASS_SHADER)
 
 	set(${PERMUTATION_OUTPUTS} ${_PERMUTATION_OUTPUTS} PARENT_SCOPE)
+endfunction()
+
+# Convenience wrapper around compile_shaders_with_depfile for GLSL components that
+# need to compile compute, fragment, and vertex shaders in one call.
+# Internally appends -S <stage> to API_COMMON_ARGS for each non-empty shader list,
+# then delegates to compile_shaders_with_depfile per stage.
+# Stages with an empty shader list are silently skipped.
+#
+# EXECUTABLE          Path to the FidelityFX SC tool executable.
+# BASE_ARGS           The base arguments for the compiler.
+# API_COMMON_ARGS     API-specific args shared by all stages, excluding the -S <stage> flag.
+# PERMUTATION_ARGS    Permutation set to compile for.
+# INCLUDES_ARGS       Include paths.
+# COMP_SHADERS        List of compute shader .glsl files (pass "" to skip).
+# FRAG_SHADERS        List of fragment shader .glsl files (pass "" to skip).
+# VERT_SHADERS        List of vertex shader .glsl files (pass "" to skip).
+# OUTPUT_PATH         Path to store compiled shader output.
+# PERMUTATION_OUTPUTS Output variable name receiving the combined list of generated headers.
+function(compile_all_shaders
+    EXECUTABLE BASE_ARGS API_COMMON_ARGS PERMUTATION_ARGS INCLUDES_ARGS
+    COMP_SHADERS FRAG_SHADERS VERT_SHADERS
+    OUTPUT_PATH PERMUTATION_OUTPUTS)
+
+    message(STATUS "\n\nFunction compile_all_shaders()")
+    message(STATUS "----------------------------------------")
+    message(STATUS "EXE=${EXECUTABLE}")
+    message(STATUS "BASE=${BASE_ARGS}")
+    message(STATUS "API_COMMON=${API_COMMON_ARGS}")
+    message(STATUS "PERMS=${PERMUTATION_ARGS}")
+    message(STATUS "INCLUDES=${INCLUDES_ARGS}")
+    message(STATUS "COMP_SHADERS=${COMP_SHADERS}")
+    message(STATUS "FRAG_SHADERS=${FRAG_SHADERS}")
+    message(STATUS "VERT_SHADERS=${VERT_SHADERS}")
+    message(STATUS "OUTPUT_PATH=${OUTPUT_PATH}")
+    message(STATUS "PERMUTATION_OUTPUTS=${PERMUTATION_OUTPUTS}")
+
+    set(_ALL_OUTPUTS)
+
+    if(COMP_SHADERS)
+        compile_shaders_with_depfile(
+            "${EXECUTABLE}"
+            "${BASE_ARGS}" "${API_COMMON_ARGS};-S;comp" "${PERMUTATION_ARGS}" "${INCLUDES_ARGS}"
+            "${COMP_SHADERS}" "${OUTPUT_PATH}" _STAGE_OUTPUTS)
+        list(APPEND _ALL_OUTPUTS ${_STAGE_OUTPUTS})
+    endif()
+
+    if(FRAG_SHADERS)
+        compile_shaders_with_depfile(
+            "${EXECUTABLE}"
+            "${BASE_ARGS}" "${API_COMMON_ARGS};-S;frag" "${PERMUTATION_ARGS}" "${INCLUDES_ARGS}"
+            "${FRAG_SHADERS}" "${OUTPUT_PATH}" _STAGE_OUTPUTS)
+        list(APPEND _ALL_OUTPUTS ${_STAGE_OUTPUTS})
+    endif()
+
+    if(VERT_SHADERS)
+        compile_shaders_with_depfile(
+            "${EXECUTABLE}"
+            "${BASE_ARGS}" "${API_COMMON_ARGS};-S;vert" "${PERMUTATION_ARGS}" "${INCLUDES_ARGS}"
+            "${VERT_SHADERS}" "${OUTPUT_PATH}" _STAGE_OUTPUTS)
+        list(APPEND _ALL_OUTPUTS ${_STAGE_OUTPUTS})
+    endif()
+
+    set(${PERMUTATION_OUTPUTS} ${_ALL_OUTPUTS} PARENT_SCOPE)
 endfunction()
 
 # macro to add shader output files to a list for dependencies

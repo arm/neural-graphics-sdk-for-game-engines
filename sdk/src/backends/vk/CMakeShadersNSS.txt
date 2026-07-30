@@ -20,12 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
-
-# Set Vulkan specific compiler args
-set(NSS_API_BASE_ARGS
-    -compiler=glslang -e main --target-env vulkan1.1 -S comp -DFFX_GLSL=1)
 
 # Compile glsl shaders
 include("${FFX_GPU_PATH}/nss/CMakeCompileNSSShaders.txt")

@@ -66,7 +66,7 @@ if(ANDROID)
         set_property(TARGET ${PROJECT_NAME} PROPERTY ANDROID_ASSETS_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/../assets)
         set_property(TARGET ${PROJECT_NAME} PROPERTY ANDROID_JAVA_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../bldsys/android/java)
     endif()
-    
+
     # Add packaging project only if not using CMake's toolchain
     if(CMAKE_SYSTEM_VERSION GREATER 1)
         add_android_package_project(
@@ -87,8 +87,8 @@ endif()
 # Create MSVC project
 if(MSVC)
     # Set VS startup project, working directory to project root, and command line arguments to default sample
-    set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
-    set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    set_property(DIRECTORY ${SAMPLES_ROOT} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+    set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${SAMPLES_ROOT}")
     set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_COMMAND_ARGUMENTS "sample hello_triangle")
 
     #Configure output paths
@@ -201,7 +201,7 @@ if(IOS)
 elseif(APPLE)
 	# Set Xcode working directory to project root, and command line arguments to default sample
     set_target_properties(${PROJECT_NAME} PROPERTIES
-            XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            XCODE_SCHEME_WORKING_DIRECTORY "${SAMPLES_ROOT}"
             XCODE_SCHEME_ARGUMENTS "sample hello_triangle"
 	)
 endif()

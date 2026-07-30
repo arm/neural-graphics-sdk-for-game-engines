@@ -1,113 +1,103 @@
-# Welcome to the Neural Graphics SDK for Game Engines
+# Neural Graphics SDK for Game Engines
 
-Neural Graphics SDK for Game Engines is Arm’s unified graphics software development kit designed to support multiple rendering use cases across diverse engines and platforms. It is derived from AMD's FFX SDK 1.1.3(https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK). It consolidates technologies like NSS (Neural Super Sampling), ASR(Accuracy Super Resolution), and NFRU (Neural Frame Rate Upsampling) into a modular, engine-agnostic framework.
+The Neural Graphics Software Development Kit (SDK) is Arm's unified graphics SDK for multiple rendering use cases across diverse game engines and platforms. Derived from [AMD FidelityFX SDK 1.1.3](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), it provides a modular, engine-agnostic framework that makes high-quality Neural Super Sampling (NSS) and Neural Frame Rate Upscaling (NFRU) straightforward to integrate. For complete build, integration, API, and sample instructions, see the [User Guide](docs/user_guide.md).
 
-Currently, Neural Graphics SDK for Game Engines supports [NSS](/docs/NSS/NSS.md).
+---
 
-![invert](/docs/media/overview.svg "A diagram showing the sdk structure.")
+## Features
 
-'*' means not supported yet.
+| Component | Description | Platforms |
+|-----------|-------------|-----------|
+| **NSS** — Neural Super Sampling | Temporal upscaling from render resolution to display resolution using a neural network. Supports Quality / Balanced / Performance presets and flexible upscale ratios. | Windows 11 x64, Linux x64, Android AArch64 |
+| **NFRU** — Neural Frame Rate Upscaling | Frame interpolation that generates one extra frame between every two rendered frames, increasing perceived frame rate with predictable latency. | Windows 11 x64, Linux x64, Android AArch64 |
 
-*ASR: Not supported yet. But it will be a fallback for NSS, for some devices cannot support ML extensions for Vulkan.
+---
 
-api_layer: we are compliant with AMD FidelityFX API 1.1.3.
+## Requirements
 
-components: Currently we support [NSS](/docs/NSS/NSS.md). All components are implemented independently in this layer.
+**Supported platforms:** Windows 11 x64, Linux x64, Android AArch64.
 
-backend: All components share one backend. It will access deeper layers via Vulkan APIs.
+| Tool category | Notes |
+|---------------|-------|
+| Git | Required to clone the repository and initialize its submodules |
+| CMake | Build system (see [user guide — setup](docs/user_guide.md#set-up-your-environment) for exact version range) |
+| Python 3 | Used by `build.py` |
+| Vulkan SDK | Vulkan-only backend; see [user guide — setup](docs/user_guide.md#set-up-your-environment) for recommended version |
+| Android NDK | Required for Android AArch64 target; see [user guide — platform requirements](docs/user_guide.md#platform-support) for details |
 
-[Vulkan Emulation Layer](#vulkan-emulation-layer): Emulation layers for supporting the ML extensions and Vulkan headers before the real device is ready.(https://github.com/arm/ai-ml-sdk-for-vulkan)
+### Vulkan Emulation Layer
 
-## System requirement
+The SDK targets the Vulkan backend exclusively. For devices without native Vulkan ML extension support (`VK_ARM_tensors`, `VK_ARM_data_graph`), use the [Arm Vulkan ML Emulation Layer](https://github.com/arm/ai-ml-emulation-layer-for-vulkan/releases).
 
-Cmake: minimun version 3.21, maxmum version 3.31
+---
 
-Vulkan SDK: recommend version 1.4.321.0. You can download from Lunarg(https://www.lunarg.com/vulkan-sdk/).
+## Quick Start
 
-## Vulkan Emulation Layer
-
-After the SDK has been integrated, you are ready to run Neural Graphics technologies, like [NSS](/docs/NSS/NSS.md) in your project. But before real devices are ready for ML extensions for Vulkan, you need to enable Vulkan emulation layers.
-
-You can use "Vulkan configurator" in your vulkan sdk:
-
-![invert](/docs/media/Enable_vulkan_emulation_layer.png "A screenshot to enable vulkan emulation layer.")
-
-Or add Vulkan emulation layer libs' path to your system environment. For example:
-Windows:
-
-```bash
-set "VK_ADD_LAYER_PATH=path\to\VulkanML"
-set "VK_INSTANCE_LAYERS=VK_LAYER_ML_Graph_Emulation;VK_LAYER_ML_Tensor_Emulation"
-```
-
-Linux:
+### 1. Clone the Repository
 
 ```bash
-export VK_ADD_LAYER_PATH="path/to/VulkanMLLib"
-export LD_LIBRARY_PATH="path/to/VulkanMLLib"
-export VK_INSTANCE_LAYERS="VK_LAYER_ML_Graph_Emulation:VK_LAYER_ML_Tensor_Emulation"
+git clone https://github.com/arm/neural-graphics-sdk-for-game-engines.git
+cd neural-graphics-sdk-for-game-engines
+git submodule update --init --recursive
 ```
 
-Whatever method you use, make sure VK_LAYER_ML_Graph_Emulation is enabled before VK_LAYER_ML_Tensor_Emulation.
+### 2. Build
 
-## Build SDK
+```bash
+# Show all available options and targets
+python build.py -h
 
-Follow these steps to build the SDK:
-
-1. Ensure you have python installed.
-2. Run the `build.py` cross-platform script to build the SDK.
-3. Run the script with `-h` to view detailed usage information.
-
-If the SDK builds successfully, the libraries for the SDK are generated in the `./bin` folder.
-
-## Enable extensions
-
-When creating vulkan physical devices, you must enable the necessary extensions:
-
-- `VulkanExtensions::kVK_ARM_tensors`
-- `VulkanExtensions::kVK_ARM_data_graph`.
-
-Sample code:
-
-```cpp
-VkDeviceCreateInfo ci = {};
-ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-... //Other create info settings
- 
-VkPhysicalDeviceTensorFeaturesARM tensorFeature = {};
-{
-    tensorFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM;
- 
-    VkPhysicalDeviceFeatures2 features2 = {};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &tensorFeature;
-    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
- 
-    tensorFeature.pNext = const_cast<void*>(ci.pNext);
-    ci.pNext = &tensorFeature;
-}
- 
-VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeature = {};
-{
-    dataGraphFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM;
- 
-    VkPhysicalDeviceFeatures2 features2 = {};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &dataGraphFeature;
-    vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
- 
-    dataGraphFeature.pNext = const_cast<void*>(ci.pNext);
-    ci.pNext = &tensorFeature; 
-}
- 
-vkCreateDevice(m_physicalDevice, &ci, nullptr, &m_vkdevice)
+# Example: Release build for Linux x64
+python build.py -t Release -b vk_linux_x64
 ```
 
-## Limitations
+Additional build targets (Windows x64, Android AArch64) and Docker-based builds are described in the [user guide](docs/user_guide.md#build-the-sdk).
 
-The SDK only supports vulkan backend.
+### 3. Integrate
 
-The SDK does not implement automatic GPU synchronization - it relies on the application to properly synchronize GPU work before context destruction.
+Add the SDK to your project as a CMake subproject (`add_subdirectory`) or link the prebuilt library from the `bin/` folder. Then create and dispatch an NSS or NFRU context using the SDK API. See the [user guide](docs/user_guide.md#integration-guidelines) for the complete integration walkthrough.
+
+### 4. Run a Sample
+
+```bash
+# Build with samples included
+python build.py -t Release -b vk_linux_x64 --build-samples
+```
+
+For NSS and NFRU sample configuration, dataset setup, and run instructions, see the [user guide — NSS sample](docs/user_guide.md#neural-super-sampling-sample) and [user guide — NFRU sample](docs/user_guide.md#neural-frame-rate-upscaling-sample) sections.
+
+---
+
+## Known Issues
+
+- In very rare cases, certain upscale ratios can trigger float32 precision issues in the dynamic offset LUT generation path in NSS, which may manifest as visible black line artifacts in the upscaled output. As a workaround, users are advised to adjust the upscale ratio to avoid affected configurations until a permanent fix is available.
+
+---
+
+## Documentation
+
+- [User Guide](docs/user_guide.md) — build, integration, API reference, and samples
+- [Release Notes](RELEASE-NOTES.md)
+
+---
+
+## License
+
+The Arm Neural Graphics SDK software in this repository is licensed under the [MIT License](LICENSES/MIT.txt)
+
+The [Arm Neural Graphics SDK Developer Guide](docs/user_guide.md) is not licensed under the MIT License.
+
+The [Arm Neural Graphics SDK Developer Guide](docs/user_guide.md) is licensed separately under the Creative Commons Attribution-NoDerivatives 4.0 International License (CC BY-ND 4.0): https://creativecommons.org/licenses/by-nd/4.0/  – see [CC-BY-4.0](LICENSES/CC-BY-4.0.txt)
+
+Copyright © 2025–2026 Arm Limited.
+
+Except for the rights expressly granted under that license, Arm reserves all rights in the Developer Guide.
+
+No patent or trademark rights are granted by that license.
+
+The MIT License applying to the Arm Neural Graphics SDK software does not apply to the Developer Guide.
+
+---
 
 ## Trademarks and Copyrights
 

@@ -17,12 +17,33 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace vkb
 {
+
+/// Return the first directory (cwd, then cwd/samples/) that contains both assets/ and shaders/.
+inline std::string find_samples_root()
+{
+	namespace fs = std::filesystem;
+	std::error_code ec;
+	auto cwd = fs::current_path(ec);
+	if (ec)
+		return {};
+
+	if (fs::is_directory(cwd / "assets", ec) && fs::is_directory(cwd / "shaders", ec))
+		return cwd.string();
+
+	auto samples = cwd / "samples";
+	if (fs::is_directory(samples / "assets", ec) && fs::is_directory(samples / "shaders", ec))
+		return samples.string();
+
+	return {};
+}
+
 class UnixPlatformContext;
 class WindowsPlatformContext;
 class AndroidPlatformContext;

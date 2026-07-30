@@ -26,6 +26,17 @@
 #include "ffx_provider.h"
 
 #include "ffx_provider_external.h"
+#if defined(FFX_FI)
+#include "ffx_provider_framegeneration.h"
+#if defined(FFX_BACKEND_VK)
+#include "vk/ffx_provider_framegenerationswapchain_vk.h"
+#elif defined(FFX_BACKEND_DX12)
+#include "dx12/ffx_provider_framegenerationswapchain_dx12.h"
+#include <d3d12.h>
+#else
+#error "FFX_BACKEND_DX12 must be defined if FFX_BACKEND_VK is not defined"
+#endif  // FFX_BACKEND_VK
+#endif
 
 #if defined(FFX_NSS)
 #include "ffx_provider_nss.h"
@@ -35,6 +46,15 @@
 #include <optional>
 
 static constexpr ffxProvider* providers[] = {
+#if defined(FFX_FI)
+    &ffxProvider_FrameGeneration::Instance,
+#if defined(FFX_BACKEND_VK)
+    &ffxProvider_FrameGenerationSwapChain_VK::Instance,
+#else
+    &ffxProvider_FrameGenerationSwapChain_DX12::Instance,
+#endif  // FFX_BACKEND_DX12
+#endif
+
 #if defined(FFX_NSS)
     &ffxProvider_Nss::Instance,
 #endif

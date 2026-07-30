@@ -64,7 +64,7 @@ add_library(${PROJECT_NAME} STATIC ${SRC})
 target_link_libraries(${PROJECT_NAME} PUBLIC framework)
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR})
+    ${SAMPLES_ROOT})
 
 # Link all samples
 set(PROJECT_ID_LIST ${TOTAL_SAMPLE_ID_LIST})

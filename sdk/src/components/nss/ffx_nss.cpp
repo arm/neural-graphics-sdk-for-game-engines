@@ -18,12 +18,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #include <algorithm>  // for max used inside SPD CPU code.
 #include <cfloat>     // for FLT_EPSILON
 #include <cmath>      // for fabs, abs, sinf, sqrt, etc.
+#include <cstdio>     // for snprintf
 #include <string.h>   // for memset
 #include <cstdint>
 
@@ -46,81 +47,94 @@
 // max queued frames for descriptor management
 static const uint32_t NSS_MAX_QUEUED_FRAMES = 16;
 
-// threashold for whether we should use scale preset mode
-static constexpr float SCALE_PRESET_MODE_THRESHOLD = 0.01;
-
 // lists to map shader resource bindpoint name to resource identifier
 typedef struct ResourceBinding
 {
     uint32_t index;
-    wchar_t  name[64];
+    char     name[64];
 } ResourceBinding;
 
-static const ResourceBinding srvTextureBindingTable[] = {
-    // For mirror padding
-    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR, L"r_unpadded_color"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH, L"r_unpadded_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION, L"r_unpadded_motion"},
-
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR, L"r_input_color_jittered"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH, L"r_input_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1, L"r_prev_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS, L"r_input_motion_vectors"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, L"r_prev_luma_deriv"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR, L"r_prev_upscaled_color"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, L"r_input_nearest_depth_coord"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_TM1, L"r_input_nearest_depth_coord_tm1"},
-
-    // Aliased tensors
-    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, L"r_prev_feedback_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR, L"r_coefficients_k0_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR, L"r_coefficients_k1_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR, L"r_coefficients_k2_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR, L"r_coefficients_k3_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR, L"r_coefficients_k4_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"r_preprocessed_tensor"},
+constexpr uint32_t externalCommonResources[] = {
+    FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR,
+    FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH,
+    FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS,
+    FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT,
 };
 
-static const ResourceBinding nssUavTextureBindingTable[] = {
-    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, L"rw_luma_deriv"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT, L"rw_upscaled_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT, L"rw_unpadded_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, L"rw_nearest_depth_coord_out"},
+// External resources that only needed when manage_history flag is set.
+constexpr uint32_t externalCondtinalResources[] = {
+    FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR,
+};
 
-    // For mirror padding
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR, L"rw_input_color_jittered"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH, L"rw_input_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1, L"rw_prev_depth"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS, L"rw_input_motion_vectors"},
+static const ResourceBinding srvTextureBindingTable[] = {
+    // externally registered srv resources
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR, "r_input_color_jittered"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH, "r_input_depth"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS, "r_input_motion_vectors"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT, "r_upscaled_output"},
+
+    // internally created srv resources
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1, "r_prev_depth"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_TM1, "r_prev_luma_deriv"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, "r_luma_deriv"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR, "r_prev_upscaled_color"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, "r_input_nearest_depth_coord"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ, "r_disocclusion_mask_lq"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT, "r_offset_lut"},
+
+    // Aliased tensors
+    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, "r_temporal_feedback_tensor"},
+};
+
+static const ResourceBinding uavTextureBindingTable[] = {
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1, "rw_reconstructed_prev_depth"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, "rw_luma_deriv"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT, "rw_upscaled_output"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR, "rw_prev_upscaled_color"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, "rw_nearest_depth_coord_out"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT, "rw_offset_lut"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS, "rw_debug_views"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ, "rw_disocclusion_mask_lq"},
+};
+
+static const ResourceBinding srvBufferBindingTable[] = {
+    // Aliased tensors
+    {FFX_NSS_RESOURCE_IDENTIFIER_KPN_TENSOR, "KpnCoeffBuffer"},
+};
+
+static const ResourceBinding uavBufferBindingTable[] = {
+    // Aliased tensors
+    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, "PreprocessInputTensorBuffer"},
+};
+
+static const ResourceBinding rtTextureBindingTable[] = {
+    {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV, "rw_luma_deriv"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT, "rw_upscaled_output"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR, "rw_prev_upscaled_color"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, "rw_nearest_depth_coord_out"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS, "rw_debug_views"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ, "rw_disocclusion_mask_lq"},
 };
 
 static const ResourceBinding srvTensorBindingTable[] = {
-    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, L"r_prev_feedback_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR, L"r_coefficients_k0_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR, L"r_coefficients_k1_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR, L"r_coefficients_k2_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR, L"r_coefficients_k3_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR, L"r_coefficients_k4_tensor"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"r_preprocessed_tensor"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_KPN_TENSOR, "r_coefficients_kpn_tensor"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, "r_temporal_feedback_tensor"},
     // Data graph resources
-    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"Resource_0_input"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, "Resource_0_input"},
 };
 
 static const ResourceBinding uavTensorBindingTable[] = {
     // Shader resources - taken from shader reflection information
-    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, L"rw_preprocessed_tensor"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR, "rw_preprocessed_tensor"},
     // Data graph resources - taken from data graph reflection information.
-    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, L"Resource_1_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR, L"Resource_2_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR, L"Resource_3_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR, L"Resource_4_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR, L"Resource_5_output"},
-    {FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR, L"Resource_6_output"},
+    // nss VGF: Resource_1_output = KPN coefficients (36ch, 1/4 res), Resource_2_output = temporal feedback (4ch)
+    {FFX_NSS_RESOURCE_IDENTIFIER_KPN_TENSOR, "Resource_1_output"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, "Resource_2_output"},
 };
 
 #define FFX_LENGTH(x, y) (sqrt((x) * (x) + (y) * (y)))
 
-static void printMessage(const FfxNssContext_Private* context, const FfxMsgType type, const wchar_t* message)
+static void printMessage(const FfxNssContext_Private* context, const FfxMsgType type, const char* message)
 {
     if (context && context->contextDescription.fpMessage != nullptr && message != nullptr)
     {
@@ -132,114 +146,147 @@ static void nssDebugCheckDispatch(FfxNssContext_Private* context, const FfxNssDi
 {
     if (params->commandList == nullptr)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"commandList is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "commandList is null");
     }
 
     if (params->color.resource == nullptr)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"color resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "color resource is null");
     }
 
     if (params->depth.resource == nullptr)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"depth resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "depth resource is null");
     }
 
     if (params->motionVectors.resource == nullptr)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"motionVectors resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "motionVectors resource is null");
     }
 
     if (params->output.resource == nullptr)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_ERROR, L"output resource is null");
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "output resource is null");
+    }
+
+    const bool manageHistory = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) != 0;
+    if (!manageHistory)
+    {
+        if (params->outputTm1.resource == nullptr)
+        {
+            printMessage(context, FFX_MESSAGE_TYPE_ERROR, "No valid history provided when FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is not set.");
+        }
+
+        const bool hasDebugView = (params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW;
+        if (hasDebugView)
+        {
+            if (params->debugViews.resource == nullptr)
+            {
+                printMessage(context,
+                             FFX_MESSAGE_TYPE_ERROR,
+                             "No valid debug view provided when FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is not set while "
+                             "FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW is set.");
+            }
+        }
     }
 
     if (fabs(params->jitterOffset.x) > 1.0f || fabs(params->jitterOffset.y) > 1.0f)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"jitterOffset contains value outside of expected range [-1.0, 1.0]");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "jitterOffset contains value outside of expected range [-1.0, 1.0]");
     }
 
-    if (fabs(params->motionVectorScale.x) > (float)context->contextDescription.maxRenderSize.width ||
-        fabs(params->motionVectorScale.y) > (float)context->contextDescription.maxRenderSize.height)
+    if (fabs(params->motionVectorScale.x) > (float)context->contextDescription.renderSize.width ||
+        fabs(params->motionVectorScale.y) > (float)context->contextDescription.renderSize.height)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"motionVectorScale is greater than context maxRenderSize");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "motionVectorScale is greater than context renderSize");
     }
 }
 
 static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
 {
-    for (uint32_t srvIndex = 0; srvIndex < inoutPipeline->srvTextureCount; ++srvIndex)
-    {
-        int32_t mapIndex = 0;
-        for (mapIndex = 0; mapIndex < FFX_COUNTOF(srvTextureBindingTable); ++mapIndex)
+    FFX_ASSERT(inoutPipeline != nullptr);
+
+    auto patchResourceIdentifier = [&](FfxResourceBinding*    pipelineResourceBindingTable,
+                                       const ResourceBinding* resourceIdNameTable,
+                                       uint32_t               resourceIdNameTableCount,
+                                       uint32_t               resourceCount) -> FfxErrorCode {
+        FFX_ASSERT(pipelineResourceBindingTable != nullptr);
+        FFX_ASSERT(resourceIdNameTable != nullptr);
+
+        for (uint32_t resourceIndex = 0; resourceIndex < resourceCount; ++resourceIndex)
         {
-            if (0 == wcscmp(srvTextureBindingTable[mapIndex].name, inoutPipeline->srvTextureBindings[srvIndex].name))
-                break;
+            int32_t mapIndex = 0;
+            for (mapIndex = 0; mapIndex < (int32_t)resourceIdNameTableCount; ++mapIndex)
+            {
+                if (0 == strcmp(resourceIdNameTable[mapIndex].name, pipelineResourceBindingTable[resourceIndex].name))
+                    break;
+            }
+            if (mapIndex == (int32_t)resourceIdNameTableCount)
+                return FFX_ERROR_INVALID_ARGUMENT;
+
+            pipelineResourceBindingTable[resourceIndex].resourceIdentifier = resourceIdNameTable[mapIndex].index;
         }
-        if (mapIndex == FFX_COUNTOF(srvTextureBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+        return FFX_OK;
+    };
 
-        inoutPipeline->srvTextureBindings[srvIndex].resourceIdentifier = srvTextureBindingTable[mapIndex].index;
-    }
+    // SRV textures
+    FfxErrorCode errorCode =
+        patchResourceIdentifier(inoutPipeline->srvTextureBindings, srvTextureBindingTable, FFX_COUNTOF(srvTextureBindingTable), inoutPipeline->srvTextureCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-    for (uint32_t uavIndex = 0; uavIndex < inoutPipeline->uavTextureCount; ++uavIndex)
-    {
-        int32_t mapIndex = 0;
-        for (mapIndex = 0; mapIndex < FFX_COUNTOF(nssUavTextureBindingTable); ++mapIndex)
-        {
-            if (0 == wcscmp(nssUavTextureBindingTable[mapIndex].name, inoutPipeline->uavTextureBindings[uavIndex].name))
-                break;
-        }
-        if (mapIndex == FFX_COUNTOF(nssUavTextureBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+    // UAV textures
+    errorCode =
+        patchResourceIdentifier(inoutPipeline->uavTextureBindings, uavTextureBindingTable, FFX_COUNTOF(uavTextureBindingTable), inoutPipeline->uavTextureCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-        inoutPipeline->uavTextureBindings[uavIndex].resourceIdentifier = nssUavTextureBindingTable[mapIndex].index;
-    }
+    // SRV buffers
+    errorCode =
+        patchResourceIdentifier(inoutPipeline->srvBufferBindings, srvBufferBindingTable, FFX_COUNTOF(srvBufferBindingTable), inoutPipeline->srvBufferCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-    for (uint32_t tensorIndex = 0; tensorIndex < inoutPipeline->srvTensorCount; ++tensorIndex)
-    {
-        int32_t mapIndex = 0;
-        for (mapIndex = 0; mapIndex < FFX_COUNTOF(srvTensorBindingTable); ++mapIndex)
-        {
-            if (0 == wcscmp(srvTensorBindingTable[mapIndex].name, inoutPipeline->srvTensorBindings[tensorIndex].name))
-                break;
-        }
-        if (mapIndex == FFX_COUNTOF(srvTensorBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+    // UAV buffers
+    errorCode =
+        patchResourceIdentifier(inoutPipeline->uavBufferBindings, uavBufferBindingTable, FFX_COUNTOF(uavBufferBindingTable), inoutPipeline->uavBufferCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-        inoutPipeline->srvTensorBindings[tensorIndex].resourceIdentifier = srvTensorBindingTable[mapIndex].index;
-    }
+    // Render target textures
+    errorCode = patchResourceIdentifier(inoutPipeline->rtBindings, rtTextureBindingTable, FFX_COUNTOF(rtTextureBindingTable), inoutPipeline->rtCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-    for (uint32_t tensorIndex = 0; tensorIndex < inoutPipeline->uavTensorCount; ++tensorIndex)
-    {
-        int32_t mapIndex = 0;
-        for (mapIndex = 0; mapIndex < FFX_COUNTOF(uavTensorBindingTable); ++mapIndex)
-        {
-            if (0 == wcscmp(uavTensorBindingTable[mapIndex].name, inoutPipeline->uavTensorBindings[tensorIndex].name))
-                break;
-        }
-        if (mapIndex == FFX_COUNTOF(uavTensorBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+    // SRV tensors
+    errorCode =
+        patchResourceIdentifier(inoutPipeline->srvTensorBindings, srvTensorBindingTable, FFX_COUNTOF(srvTensorBindingTable), inoutPipeline->srvTensorCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
-        inoutPipeline->uavTensorBindings[tensorIndex].resourceIdentifier = uavTensorBindingTable[mapIndex].index;
-    }
+    // UAV tensors
+    errorCode =
+        patchResourceIdentifier(inoutPipeline->uavTensorBindings, uavTensorBindingTable, FFX_COUNTOF(uavTensorBindingTable), inoutPipeline->uavTensorCount);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
     return FFX_OK;
 }
 
-static uint32_t getPipelinePermutationFlags(FfxNssContext_Private* context, const float upscaleRatio)
+static uint32_t getPipelinePermutationFlags(FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
+    FFX_ASSERT(context->contextDescription.backendInterface.devCapInitialized);
 
-    const uint32_t contextFlags  = context->contextDescription.flags;
-    const bool     fp16Supported = context->deviceCapabilities.fp16Supported;
+    FfxDeviceCapabilities capabilities;
+    FFX_VALIDATE(context->contextDescription.backendInterface.fpGetDeviceCapabilities(&context->contextDescription.backendInterface, &capabilities));
+    const uint32_t contextFlags          = context->contextDescription.flags;
+    const bool     fp16Supported         = capabilities.fp16Supported;
+    const bool     computeSupportTensor  = capabilities.computeSupportTensor;
+    const bool     fragmentSupportTensor = capabilities.fragmentSupportTensor;
 
     uint32_t flags = 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_QUANTIZED) ? NSS_SHADER_PERMUTATION_QUANTIZED : 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED) ? NSS_SHADER_PERMUTATION_REVERSE_Z : 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC) ? NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC : 0;
-    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES) ? NSS_SHADER_PERMUTATION_ALIAS_OUTPUT_TENSORS_AS_IMAGES : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) ? NSS_SHADER_PERMUTATION_MANAGE_HISTORY : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT) ? NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT) ? NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT : 0;
+    flags |= (computeSupportTensor) ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : 0;
+    flags |= (fragmentSupportTensor) ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : 0;
 
     const bool require16bit = (contextFlags & FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT) != 0;
     if (require16bit)
@@ -250,77 +297,191 @@ static uint32_t getPipelinePermutationFlags(FfxNssContext_Private* context, cons
         }
         else
         {
-            printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"16-bit resources requested but not supported by the device.");
+            printMessage(context, FFX_MESSAGE_TYPE_WARNING, "16-bit resources requested but not supported by the device.");
         }
     }
 
-    // If the upscale ratio matches our scale preset, we use preset mode for better performance
-    if (fabs(upscaleRatio - 2.0f) < SCALE_PRESET_MODE_THRESHOLD)
+    // If both axes match exact x2, use the static LUT path for better performance.
+    if (context->contextDescription.upscaleSize.width == 2 * context->contextDescription.renderSize.width &&
+        context->contextDescription.upscaleSize.height == 2 * context->contextDescription.renderSize.height)
     {
-        // Only support preset upscale ratio 2.0x for now.
-        // Other ratios will use general path.
-        flags |= NSS_SHADER_PERMUTATION_SCALE_PRESET_MODE_X2;
+        flags |= NSS_SHADER_PERMUTATION_SCALE_PRESET_X2;
     }
+
+    const auto qualityMode = context->contextDescription.qualityMode;
+    flags |= (static_cast<uint32_t>(qualityMode) << NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT);
 
     return flags;
 }
 
-static FfxErrorCode createPipelineStates(FfxNssContext_Private* context)
+static uint32_t computeGreatestCommonDivisor(uint32_t a, uint32_t b)
+{
+    while (b != 0)
+    {
+        const uint32_t t = b;
+        b                = a % b;
+        a                = t;
+    }
+    return a == 0 ? 1u : a;
+}
+
+static uint32_t offsetLutGroupsPerTile(uint32_t pipelineFlags)
+{
+    const auto qualityModeValue =
+        static_cast<FfxNssShaderQualityMode>((pipelineFlags >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK);
+    return (qualityModeValue == FFX_NSS_SHADER_QUALITY_MODE_QUALITY) ? 3u : 1u;
+}
+
+static FfxErrorCode buildDataGraphTensorInfo(const FfxInternalResourceDescription* internalSurfaceDesc,
+                                             uint32_t                              internalSurfaceCount,
+                                             FfxDataGraphTensorInfo*               outTensorInfo,
+                                             uint32_t                              maxTensorInfoCount,
+                                             uint32_t*                             outTensorInfoCount)
+{
+    FFX_ASSERT(internalSurfaceDesc != nullptr);
+    FFX_ASSERT(outTensorInfo != nullptr);
+    FFX_ASSERT(outTensorInfoCount != nullptr);
+
+    uint32_t tensorInfoCount = 0;
+
+    const auto appendTensorInfo = [&](const ResourceBinding& binding, bool bufferAliased) -> FfxErrorCode {
+        for (uint32_t infoIndex = 0; infoIndex < tensorInfoCount; ++infoIndex)
+        {
+            if (0 == strcmp(outTensorInfo[infoIndex].resourceName, binding.name))
+            {
+                outTensorInfo[infoIndex].bufferAliased = bufferAliased;
+                return FFX_OK;
+            }
+        }
+
+        FFX_RETURN_ON_ERROR(tensorInfoCount < maxTensorInfoCount, FFX_ERROR_OUT_OF_RANGE);
+        outTensorInfo[tensorInfoCount++] = {binding.name, bufferAliased};
+        return FFX_OK;
+    };
+
+    for (uint32_t surfaceIndex = 0; surfaceIndex < internalSurfaceCount; ++surfaceIndex)
+    {
+        const FfxInternalResourceDescription& surfaceDesc = internalSurfaceDesc[surfaceIndex];
+        if (surfaceDesc.type != FFX_RESOURCE_TYPE_TENSOR)
+        {
+            continue;
+        }
+
+        const bool bufferAliased = (surfaceDesc.flags & FFX_RESOURCE_FLAGS_BUFFER_ALIASED) == FFX_RESOURCE_FLAGS_BUFFER_ALIASED;
+        for (uint32_t bindingIndex = 0; bindingIndex < FFX_COUNTOF(srvTensorBindingTable); ++bindingIndex)
+        {
+            if (srvTensorBindingTable[bindingIndex].index == surfaceDesc.id)
+            {
+                FFX_VALIDATE(appendTensorInfo(srvTensorBindingTable[bindingIndex], bufferAliased));
+            }
+        }
+
+        for (uint32_t bindingIndex = 0; bindingIndex < FFX_COUNTOF(uavTensorBindingTable); ++bindingIndex)
+        {
+            if (uavTensorBindingTable[bindingIndex].index == surfaceDesc.id)
+            {
+                FFX_VALIDATE(appendTensorInfo(uavTensorBindingTable[bindingIndex], bufferAliased));
+            }
+        }
+    }
+
+    *outTensorInfoCount = tensorInfoCount;
+    return FFX_OK;
+}
+
+static FfxErrorCode createPipelineStates(FfxNssContext_Private* context, const FfxDataGraphTensorInfo* dataGraphTensorInfo, uint32_t dataGraphTensorInfoCount)
 {
     FFX_ASSERT(context);
-
-    const uint32_t width        = context->paddedInputWidth;
-    const uint32_t height       = context->paddedInputHeight;
-    const float    upscaleRatio = static_cast<float>(context->paddedOutputWidth) / static_cast<float>(context->paddedInputWidth);
 
     FfxPipelineDescription pipelineDescription = {};
     pipelineDescription.contextFlags           = context->contextDescription.flags;
 
-    // Samplers
-    pipelineDescription.samplerCount      = 2;
-    FfxSamplerDescription samplerDescs[2] = {
-        {FFX_FILTER_TYPE_MINMAGMIP_POINT, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE, FFX_FALSE},
-        {FFX_FILTER_TYPE_MINMAGMIP_LINEAR, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE, FFX_FALSE}};
-    pipelineDescription.samplers = samplerDescs;
-
     // Set up pipeline descriptor (basically RootSignature and binding)
-    uint32_t pipelineFlags = getPipelinePermutationFlags(context, upscaleRatio);
 
     // Root constants
-    pipelineDescription.rootConstantBufferCount     = 1;
-    FfxRootConstantDescription rootConstantDescs[1] = {{sizeof(NssConstants) / sizeof(uint32_t), FFX_BIND_COMPUTE_SHADER_STAGE}};
-    pipelineDescription.rootConstants               = rootConstantDescs;
-
-    const auto CreatePipeline = [&](FfxPass pass, const wchar_t* name, FfxPipelineState* pipeline) -> FfxErrorCode {
+    pipelineDescription.rootConstantBufferCount = 1;
+    const auto CreatePipeline                   = [&](FfxPass pass, const char* name, FfxPipelineState* pipeline, bool useFragment) -> FfxErrorCode {
         ffxSafeReleasePipeline(&context->contextDescription.backendInterface, pipeline, context->effectContextId);
 
-        wcscpy_s(pipelineDescription.name, name);
+        strncpy(pipelineDescription.name, name, FFX_RESOURCE_NAME_SIZE - 1);
+        pipelineDescription.name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 
-        FFX_VALIDATE(context->contextDescription.backendInterface.fpCreatePipeline(
-            &context->contextDescription.backendInterface, FFX_EFFECT_NSS, pass, pipelineFlags, &pipelineDescription, context->effectContextId, pipeline));
+        FfxRootConstantDescription rootConstantDescs[1] = {
+            {sizeof(NssConstants) / sizeof(uint32_t), useFragment ? FFX_BIND_PIXEL_SHADER_STAGE : FFX_BIND_COMPUTE_SHADER_STAGE}};
+        pipelineDescription.rootConstants = rootConstantDescs;
+
+        FfxSamplerDescription samplerDescs[2] = {{FFX_FILTER_TYPE_MINMAGMIP_POINT,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  useFragment ? FFX_BIND_PIXEL_SHADER_STAGE : FFX_BIND_COMPUTE_SHADER_STAGE,
+                                                  FFX_FALSE},
+                                                 {FFX_FILTER_TYPE_MINMAGMIP_LINEAR,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  FFX_ADDRESS_MODE_CLAMP,
+                                                  useFragment ? FFX_BIND_PIXEL_SHADER_STAGE : FFX_BIND_COMPUTE_SHADER_STAGE,
+                                                  FFX_FALSE}};
+
+        pipelineDescription.samplerCount = 2;
+        pipelineDescription.samplers     = samplerDescs;
+        pipelineDescription.stage        = useFragment ? FFX_BIND_PIXEL_SHADER_STAGE : FFX_BIND_COMPUTE_SHADER_STAGE;
+
+        if (useFragment)
+        {
+            FFX_VALIDATE(context->contextDescription.backendInterface.fpCreateGraphicsPipeline(&context->contextDescription.backendInterface,
+                                                                                               FFX_EFFECT_NSS,
+                                                                                               pass,
+                                                                                               context->pipelineFlags,
+                                                                                               &pipelineDescription,
+                                                                                               context->effectContextId,
+                                                                                               pipeline));
+        }
+        else
+        {
+            FFX_VALIDATE(context->contextDescription.backendInterface.fpCreateComputePipeline(&context->contextDescription.backendInterface,
+                                                                                              FFX_EFFECT_NSS,
+                                                                                              pass,
+                                                                                              context->pipelineFlags,
+                                                                                              &pipelineDescription,
+                                                                                              context->effectContextId,
+                                                                                              pipeline));
+        }
         patchResourceBindings(pipeline);
 
         return FFX_OK;
     };
 
-    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_MIRROR_PADDING, L"NSS-MirrorPadding", &context->pipelineNssMirrorPadding));
-    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_PREPROCESS, L"NSS-Preprocess", &context->pipelineNssPreprocess));
-    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_POSTPROCESS, L"NSS-Postprocess", &context->pipelineNssPostprocess));
-    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DEBUG_VIEW, L"NSS-DebugView", &context->pipelineNssDebugView));
+    const bool preProcessUseFragment  = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
+    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+
+    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DEPTH_SCATTER, "NSS-DepthScatter", &context->pipelineNssDepthScatter, false));
+    if (context->useDisocclusionMaskPass)
+    {
+        FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DISOCCLUSION_MASK, "NSS-DisocclusionMask", &context->pipelineNssDisocclusionMask, preProcessUseFragment));
+    }
+    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_PREPROCESS, "NSS-Preprocess", &context->pipelineNssPreprocess, preProcessUseFragment));
+    if (context->useDynamicOffsetLut)
+    {
+        FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_GENERATE_OFFSET_LUT, "NSS-GenerateOffsetLut", &context->pipelineNssGenerateOffsetLut, false));
+    }
+    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_POSTPROCESS, "NSS-Postprocess", &context->pipelineNssPostprocess, postProcessUseFragment));
+    FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DEBUG_VIEW, "NSS-DebugView", &context->pipelineNssDebugView, postProcessUseFragment));
 
     // DATA GRAPH
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDataGraph, context->effectContextId);
-    wcscpy(pipelineDescription.name, L"NSS-Graph");
-    FFX_ASSERT_MESSAGE(width % FFX_NSS_RESOURCE_ALIGNMENT == 0 && height % FFX_NSS_RESOURCE_ALIGNMENT == 0,
-                       "The NSS algorithm requires the input resolution must be 8 aligned!");
+    strncpy(pipelineDescription.name, "NSS-Graph", FFX_RESOURCE_NAME_SIZE - 1);
+    pipelineDescription.name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+    pipelineDescription.dataGraphTensorInfo              = dataGraphTensorInfo;
+    pipelineDescription.dataGraphTensorInfoCount         = dataGraphTensorInfoCount;
     FFX_VALIDATE(context->contextDescription.backendInterface.fpCreateDataGraphPipeline(&context->contextDescription.backendInterface,
                                                                                         FFX_EFFECT_NSS,
                                                                                         FFX_NSS_PASS_DATA_GRAPH,
-                                                                                        pipelineFlags,
+                                                                                        context->pipelineFlags,
                                                                                         &pipelineDescription,
                                                                                         context->effectContextId,
-                                                                                        width,
-                                                                                        height,
+                                                                                        context->dataGraphSize.width,
+                                                                                        context->dataGraphSize.height,
                                                                                         &context->pipelineNssDataGraph));
     patchResourceBindings(&context->pipelineNssDataGraph);
     // END DATA GRAPH
@@ -341,66 +502,124 @@ static FfxErrorCode createResourceFromDescription(FfxNssContext_Private* context
                                                         resDesc->usage,
                                                         resDesc->batchSize,
                                                         resDesc->shapeSize};
-    const FfxResourceStates      initialState =
-        (resDesc->usage == FFX_RESOURCE_USAGE_READ_ONLY) ? FFX_RESOURCE_STATE_COMPUTE_READ : FFX_RESOURCE_STATE_UNORDERED_ACCESS;
+    const FfxResourceStates initialState = (resDesc->usage == FFX_RESOURCE_USAGE_READ_ONLY) ? FFX_RESOURCE_STATE_COMPUTE_READ : FFX_RESOURCE_STATE_GENERIC_UAV;
     const FfxCreateResourceDescription createResourceDescription = {
         FFX_HEAP_TYPE_DEFAULT, resourceDescription, initialState, resDesc->name, resDesc->id, resDesc->initData};
     return context->contextDescription.backendInterface.fpCreateResource(
         &context->contextDescription.backendInterface, &createResourceDescription, context->effectContextId, &context->srvResources[resDesc->id]);
 }
 
-/// Computes the padded input and output resolutions based on unpadded resolutions.
-///
-/// @param unpaddedInputWidth      Unpadded input width.
-/// @param unpaddedInputHeight     Unpadded input height.
-/// @param unpaddedOutputWidth     Unpadded output width.
-/// @param unpaddedOutputHeight    Unpadded output height.
-/// @param paddedInputWidth        [out] Padded input width.
-/// @param paddedInputHeight       [out] Padded input height.
-/// @param paddedOutputWidth       [out] Padded output width.
-/// @param paddedOutputHeight      [out] Padded output height.
-///
-/// @return True if any of the padded dimensions differ from the unpadded dimensions, false otherwise.
-static bool ComputePaddedResolution(const uint32_t unpaddedInputWidth,
-                                    const uint32_t unpaddedInputHeight,
-                                    const uint32_t unpaddedOutputWidth,
-                                    const uint32_t unpaddedOutputHeight,
-                                    uint32_t&      paddedInputWidth,
-                                    uint32_t&      paddedInputHeight,
-                                    uint32_t&      paddedOutputWidth,
-                                    uint32_t&      paddedOutputHeight)
-{
-    paddedInputWidth           = FFX_ALIGN_UP(unpaddedInputWidth, FFX_NSS_RESOURCE_ALIGNMENT);
-    paddedInputHeight          = FFX_ALIGN_UP(unpaddedInputHeight, FFX_NSS_RESOURCE_ALIGNMENT);
-    const float upscaleFactorX = static_cast<float>(unpaddedOutputWidth) / static_cast<float>(unpaddedInputWidth);
-    const float upscaleFactorY = static_cast<float>(unpaddedOutputHeight) / static_cast<float>(unpaddedInputHeight);
-
-    // TODO: does the output require the alignment?
-    paddedOutputWidth  = FFX_ALIGN_UP(static_cast<uint32_t>(paddedInputWidth * upscaleFactorX), FFX_NSS_RESOURCE_ALIGNMENT);
-    paddedOutputHeight = FFX_ALIGN_UP(static_cast<uint32_t>(paddedInputHeight * upscaleFactorY), FFX_NSS_RESOURCE_ALIGNMENT);
-
-    return paddedInputWidth != unpaddedInputWidth || paddedInputHeight != unpaddedInputHeight || paddedOutputWidth != unpaddedOutputWidth ||
-           paddedOutputHeight != unpaddedOutputHeight;
-}
-
 static void nssDebugCheckCreate(FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
-    const FfxNssContextDescription& desc = context->contextDescription;
+    FFX_ASSERT_MESSAGE(context->dataGraphSize.width % FFX_NSS_RESOURCE_ALIGNMENT == 0, "DataGraph width is not aligned!");
+    FFX_ASSERT_MESSAGE(context->dataGraphSize.height % FFX_NSS_RESOURCE_ALIGNMENT == 0, "DataGraph height is not aligned!");
 
-    if (fabs(desc.maxUpscaleSize.width / desc.maxRenderSize.width) - fabs(desc.maxUpscaleSize.height / desc.maxRenderSize.height) < FLT_EPSILON)
+    const auto getQualityModeString = [](const uint32_t mode) -> const char* {
+        switch (static_cast<FfxNssShaderQualityMode>(mode))
+        {
+        case FFX_NSS_SHADER_QUALITY_MODE_QUALITY:
+            return "Quality";
+        case FFX_NSS_SHADER_QUALITY_MODE_BALANCED:
+            return "Balanced";
+        case FFX_NSS_SHADER_QUALITY_MODE_PERFORMANCE:
+            return "Performance";
+        default:
+            break;
+        }
+        FFX_ASSERT_MESSAGE(0, "Unknown shader quality mode!");
+        return "Unknown";
+    };
+
+    const auto getScalePresetModeString = [](const uint32_t mode) -> const char* {
+        switch (static_cast<NssScalePresetMode>(mode))
+        {
+        case NSS_SCALE_PRESET_NONE:
+            return "None";
+        case NSS_SCALE_PRESET_X2:
+            return "x2";
+        default:
+            break;
+        }
+        FFX_ASSERT_MESSAGE(0, "Unknown scale preset mode!");
+        return "Unknown";
+    };
+
+    const FfxNssContextDescription& desc                = context->contextDescription;
+    const uint32_t                  pipelineFlags       = context->pipelineFlags;
+    constexpr uint32_t              MESSAGE_BUFFER_SIZE = 256;
+    char                            message[MESSAGE_BUFFER_SIZE];
+
+    const uint32_t lutGroupsPerTile = offsetLutGroupsPerTile(pipelineFlags);
+    snprintf(message,
+             MESSAGE_BUFFER_SIZE,
+             "\nDepth scatter size = (%u x %u), render size = (%u x %u),  data graph size = (%u x %u), dynamic lut size = ( %u * %u x %u), upscale size = (%u "
+             "x %u).\n",
+             context->depthScatterSize.width,
+             context->depthScatterSize.height,
+             desc.renderSize.width,
+             desc.renderSize.height,
+             context->dataGraphSize.width,
+             context->dataGraphSize.height,
+             lutGroupsPerTile,
+             context->reducedFractionHrSize.width,
+             context->reducedFractionHrSize.height,
+             desc.upscaleSize.width,
+             desc.upscaleSize.height);
+    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
+
+    const uint32_t scalePresetMode = (pipelineFlags & NSS_SHADER_PERMUTATION_SCALE_PRESET_X2) != 0 ? NSS_SCALE_PRESET_X2 : NSS_SCALE_PRESET_NONE;
+    const uint32_t qualityMode     = (pipelineFlags >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK;
+    FFX_ASSERT(qualityMode == static_cast<uint32_t>(context->contextDescription.qualityMode));
+    snprintf(message,
+             MESSAGE_BUFFER_SIZE,
+             "\nPipeline flags = 0x%lx, quality mode = %u (%s), scale preset mode = %u (%s=%u/%u x %u/%u), compute tensor ops = %d, fragment tensor ops = %d\n",
+             pipelineFlags,
+             static_cast<uint32_t>(qualityMode),
+             getQualityModeString(qualityMode),
+             scalePresetMode,
+             getScalePresetModeString(scalePresetMode),
+             context->reducedFractionHrSize.width,
+             context->reducedFractionLrSize.width,
+             context->reducedFractionHrSize.height,
+             context->reducedFractionLrSize.height,
+             int((pipelineFlags & NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR) != 0),
+             int((pipelineFlags & NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR) != 0));
+    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
+
+    const char* preprocessStage  = ((pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0) ? "fragment" : "compute";
+    const char* postprocessStage = ((pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0) ? "fragment" : "compute";
+    char        disocclusion_mask_str[32];
+    snprintf(disocclusion_mask_str, sizeof(disocclusion_mask_str), "-[disocclusion mask(%s)]-", preprocessStage);
+    snprintf(message,
+             MESSAGE_BUFFER_SIZE,
+             "\nActive Passes: [depth scatter(compute)]%s[preprocess(%s)]-[data graph]%s[postprocess(%s)]-[debug view(%s)]\n",
+             context->useDisocclusionMaskPass ? disocclusion_mask_str : "-",
+             preprocessStage,
+             context->useDynamicOffsetLut ? "-[dynamic lut(compute)]-" : "-",
+             postprocessStage,
+             postprocessStage);
+    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
+
+    if (fabs(float(desc.upscaleSize.width) / desc.renderSize.width) - fabs(float(desc.upscaleSize.height) / desc.renderSize.height) > FLT_EPSILON)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"width/height has different upscale ratio");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "width/height has different upscale ratio");
     }
 
-    if (desc.maxUpscaleSize.width / desc.maxRenderSize.width - 2.0f > FLT_EPSILON)
+    if (float(desc.upscaleSize.width) / desc.renderSize.width - 2.0f > FLT_EPSILON)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"It's recommanded to use upscale ratio less than x2.");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "It's recommanded to use upscale ratio less than x2.");
     }
 
-    if (context->paddedInputWidth % FFX_NSS_RESOURCE_ALIGNMENT != 0 || context->paddedInputHeight % FFX_NSS_RESOURCE_ALIGNMENT != 0)
+    const bool manageHistory = (pipelineFlags & NSS_SHADER_PERMUTATION_MANAGE_HISTORY) != 0;
+    if (manageHistory)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, L"padded input size is not aligned to required alignment");
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is set, the SDK will manage the history texture internally.");
+    }
+    else
+    {
+        printMessage(
+            context, FFX_MESSAGE_TYPE_WARNING, "FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is not set, the user must provide valid history texture each dispatch.");
     }
 }
 
@@ -415,298 +634,332 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
 
     memcpy(&context->contextDescription, contextDescription, sizeof(FfxNssContextDescription));
 
-    if ((context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
-    {
-        nssDebugCheckCreate(context);
-    }
+    const FfxDimensions2D renderSize  = contextDescription->renderSize;
+    const FfxDimensions2D displaySize = contextDescription->upscaleSize;
 
     // Create the context.
     FfxErrorCode errorCode = context->contextDescription.backendInterface.fpCreateBackendContext(
         &context->contextDescription.backendInterface, FFX_EFFECT_NSS, nullptr, &context->effectContextId);
+    if (FFX_OK != errorCode)
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, "Failed to create backend interface for NSS context.");
+        return errorCode;
+    }
+
+    // Register the message callback for backend
+    errorCode = context->contextDescription.backendInterface.fpSetMessageCallback(&context->contextDescription.backendInterface,
+                                                                                  reinterpret_cast<FfxBackendMessage>(contextDescription->fpMessage));
     FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
     // call out for device caps.
-    errorCode =
-        context->contextDescription.backendInterface.fpGetDeviceCapabilities(&context->contextDescription.backendInterface, &context->deviceCapabilities);
-    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
+    FfxDeviceCapabilities capabilities;
+    FFX_VALIDATE(context->contextDescription.backendInterface.fpGetDeviceCapabilities(&context->contextDescription.backendInterface, &capabilities));
 
-    const bool neuralGraphicsSupported = context->deviceCapabilities.tensorSupported && context->deviceCapabilities.dataGraphSupported;
+    const bool neuralGraphicsSupported = capabilities.tensorSupported && capabilities.dataGraphSupported;
     if (!neuralGraphicsSupported)
     {
         printMessage(context,
                      FFX_MESSAGE_TYPE_ERROR,
-                     L"NSS requires device with support for tensors and data graphs. "
-                     L"Please check device capabilities.");
+                     "NSS requires device with support for tensors and data graphs. "
+                     "Please check device capabilities.");
         return FFX_ERROR_NULL_DEVICE;
     }
 
     // set defaults
     context->firstExecution     = true;
     context->resourceFrameIndex = 0;
-    context->hasPaddingPass     = ComputePaddedResolution(contextDescription->maxRenderSize.width,
-                                                      contextDescription->maxRenderSize.height,
-                                                      contextDescription->maxUpscaleSize.width,
-                                                      contextDescription->maxUpscaleSize.height,
-                                                      context->paddedInputWidth,
-                                                      context->paddedInputHeight,
-                                                      context->paddedOutputWidth,
-                                                      context->paddedOutputHeight);
 
-    // NOTE: This will not work for RHI-NNE Backend!
+    // Need to initialize the pipelineFlags early so we can check if fragment job will be enabled
+    // for preprocess and postprocess and then setup the correct resource usage flag.
+    context->pipelineFlags = getPipelinePermutationFlags(context);
+    // We only need dynamic LUT for non-x2 case, x2 case will use static LUT.
+    context->useDynamicOffsetLut = (context->pipelineFlags & NSS_SHADER_PERMUTATION_SCALE_PRESET_X2) == 0;
+    const auto qualityModeValue =
+        static_cast<FfxNssShaderQualityMode>((context->pipelineFlags >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK);
+    const bool isQualityMode = (qualityModeValue == FFX_NSS_SHADER_QUALITY_MODE_QUALITY);
+    // We only need the disocclusion pass for mid/low quality
+    context->useDisocclusionMaskPass = !isQualityMode;
+
     FfxSurfaceFormat tensorFormatSingleChannel = ((contextDescription->flags & FFX_NSS_CONTEXT_FLAG_QUANTIZED) == FFX_NSS_CONTEXT_FLAG_QUANTIZED)
                                                      ? FFX_SURFACE_FORMAT_R8_SINT
                                                      : FFX_SURFACE_FORMAT_R32_FLOAT;
 
-    // NOTE: This will not work for RHI-NNE Backend!
-    FfxSurfaceFormat tensorFormatQuadChannel = ((contextDescription->flags & FFX_NSS_CONTEXT_FLAG_QUANTIZED) == FFX_NSS_CONTEXT_FLAG_QUANTIZED)
-                                                   ? FFX_SURFACE_FORMAT_R8_SINT
-                                                   : FFX_SURFACE_FORMAT_R32_FLOAT;
+    const bool                 preProcessUseFragment            = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
+    const bool                 postProcessUseFragment           = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    const FfxResourceUsage     preProcessOutputImageUsage       = preProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
+    const FfxResourceUsage     disocclusionMaskOutputImageUsage = preProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
+    const FfxResourceUsage     postProcessOutputImageUsage      = postProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
+    const bool                 preprocessSupportTensor  = preProcessUseFragment ? capabilities.fragmentSupportTensor : capabilities.computeSupportTensor;
+    const bool                 postprocessSupportTensor = postProcessUseFragment ? capabilities.fragmentSupportTensor : capabilities.computeSupportTensor;
+    constexpr FfxResourceUsage tensorUsage              = FFX_RESOURCE_USAGE_UAV;
 
-    const bool aliasTensorAsImage = (contextDescription->flags & FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES) == FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES;
+    // When preprocess doesn't support native tensor ops, the shader access the tensor via a buffer alias (std430 SSBO) or image alias.
+    const FfxResourceFlags preprocessTensorFlags = preprocessSupportTensor ? FFX_RESOURCE_FLAGS_NONE : FFX_RESOURCE_FLAGS_BUFFER_ALIASED;
+    const FfxResourceFlags kpnTensorFlags        = postprocessSupportTensor ? FFX_RESOURCE_FLAGS_NONE : FFX_RESOURCE_FLAGS_BUFFER_ALIASED;
+    const FfxResourceFlags tensorResourceFlag    = FFX_RESOURCE_FLAGS_IMAGE_ALIASED;
 
-    uint32_t           inputTensorChannel        = 12;
-    constexpr uint32_t feedbackTensorChannel     = 4;
-    constexpr uint32_t coefficientsTensorChannel = 4;
+    // Note the dimensions for each shader qualit mode should match the macros in ffx_nss_common_glsl.h
+    // KPN coefficients tensor channel count depends on quality mode
+    // TODO: we'd better query this from shape inference result.
+    uint32_t         KpnTensorChannel  = 0;
+    FfxSurfaceFormat depthOffsetFormat = FFX_SURFACE_FORMAT_UNKNOWN;
+    if (isQualityMode)
+    {
+        context->depthScatterSize.width  = renderSize.width / 2;
+        context->depthScatterSize.height = renderSize.height / 2;
+        context->dataGraphSize.width     = FFX_ALIGN_UP(renderSize.width, FFX_NSS_RESOURCE_ALIGNMENT);
+        context->dataGraphSize.height    = FFX_ALIGN_UP(renderSize.height, FFX_NSS_RESOURCE_ALIGNMENT);
+        // QUALITY (NSS_USE_SPARSE_2X2_FILTER=0) → 36 channels (full 6×6 kernel)
+        KpnTensorChannel = 36u;
+        // QUALITY (NSS_PACKED_NEAREST_OFFSET_QUAD=0): single r8 unorm offset code.
+        depthOffsetFormat = FFX_SURFACE_FORMAT_R8_UNORM;
+    }
+    else
+    {
+        context->depthScatterSize.width  = renderSize.width / 4;
+        context->depthScatterSize.height = renderSize.height / 4;
+        context->dataGraphSize.width     = FFX_ALIGN_UP(renderSize.width / 2, FFX_NSS_RESOURCE_ALIGNMENT);
+        context->dataGraphSize.height    = FFX_ALIGN_UP(renderSize.height / 2, FFX_NSS_RESOURCE_ALIGNMENT);
+        // BALANCE/PERFORMANCE (NSS_USE_SPARSE_2X2_FILTER=1) → 16 channels (sparse 2×2 kernel)
+        KpnTensorChannel = 16u;
+        // BALANCE/PERFORMANCE (NSS_PACKED_NEAREST_OFFSET_QUAD=1): four nibble offsets packed into rg8.
+        depthOffsetFormat = FFX_SURFACE_FORMAT_R8G8_UNORM;
+    }
+    // KPN tensor is at 1/4 of the padded input (dataGraph) resolution.
+    // TODO: we'd better query this from shape inference result.
+    context->kpnDimension.width  = context->dataGraphSize.width / 4;
+    context->kpnDimension.height = context->dataGraphSize.height / 4;
+
+    if (context->useDynamicOffsetLut)
+    {
+        // The dynamic LUT size is T_H * (T_W * lutGroupsPerTile), where T_H/T_W come from
+        // the reduced rational upscale factor displaySize/renderSize for each axis.
+        const uint32_t gcdWidth  = computeGreatestCommonDivisor(displaySize.width, renderSize.width);
+        const uint32_t gcdHeight = computeGreatestCommonDivisor(displaySize.height, renderSize.height);
+
+        context->reducedFractionHrSize.width  = displaySize.width / gcdWidth;
+        context->reducedFractionLrSize.width  = renderSize.width / gcdWidth;
+        context->reducedFractionHrSize.height = displaySize.height / gcdHeight;
+        context->reducedFractionLrSize.height = renderSize.height / gcdHeight;
+
+        const uint32_t lutGroupsPerTile = offsetLutGroupsPerTile(context->pipelineFlags);
+        context->offsetLutSize.width    = lutGroupsPerTile * context->reducedFractionHrSize.width;
+        context->offsetLutSize.height   = context->reducedFractionHrSize.height;
+    }
+    else
+    {
+        // For x2 case
+        context->reducedFractionHrSize.width  = 2;
+        context->reducedFractionHrSize.height = 2;
+
+        context->reducedFractionLrSize.width  = 1;
+        context->reducedFractionLrSize.height = 1;
+    }
+
+    // Always print debug info at context creation.
+    nssDebugCheckCreate(context);
+
+    constexpr uint32_t inputTensorChannel    = 12;
+    constexpr uint32_t feedbackTensorChannel = 4;
     // declare internal resources needed
-    const FfxInternalResourceDescription internalSurfaceDesc[] = {
+    const FfxInternalResourceDescription PersistentInternalSurfaceDesc[] = {
         {FFX_NSS_RESOURCE_IDENTIFIER_PREPROCESS_INPUT_TENSOR,
-         L"NSS_PreprocessInputTensor",
+         "NSS_PreprocessInputTensor",
          FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
+         tensorUsage,
          tensorFormatSingleChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         context->dataGraphSize.width,
+         context->dataGraphSize.height,
          1,
-         FFX_RESOURCE_FLAGS_NONE,
+         preprocessTensorFlags,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
          1,
          inputTensorChannel,
          4},
 
         {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
-         L"NSS_LumaDeriv_1",
+         "NSS_LumaDeriv_1",
          FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R8G8_UNORM,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         preProcessOutputImageUsage,
+         FFX_SURFACE_FORMAT_R8G8B8A8_SNORM,
+         context->dataGraphSize.width,
+         context->dataGraphSize.height,
          1,
          FFX_RESOURCE_FLAGS_NONE,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
 
         {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2,
-         L"NSS_LumaDeriv_2",
+         "NSS_LumaDeriv_2",
          FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R8G8_UNORM,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         preProcessOutputImageUsage,
+         FFX_SURFACE_FORMAT_R8G8B8A8_SNORM,
+         context->dataGraphSize.width,
+         context->dataGraphSize.height,
          1,
          FFX_RESOURCE_FLAGS_NONE,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
 
-        {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1,
-         L"NSS_DepthOffset_1",
+        {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD,
+         "NSS_DepthOffset",
          FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R8_UNORM,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         preProcessOutputImageUsage,
+         depthOffsetFormat,
+         context->dataGraphSize.width,
+         context->dataGraphSize.height,
          1,
          FFX_RESOURCE_FLAGS_NONE,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
 
-        {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2,
-         L"NSS_DepthOffset_2",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R8_UNORM,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1,
-         L"NSS_FeedbackTensor_1",
+        {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR,
+         "NSS_FeedbackTensor",
          FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
+         tensorUsage,
          tensorFormatSingleChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         context->dataGraphSize.width,
+         context->dataGraphSize.height,
          1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
+         tensorResourceFlag,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
          1,
          feedbackTensorChannel,
          4},
 
-        {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2,
-         L"NSS_FeedbackTensor_2",
+        {FFX_NSS_RESOURCE_IDENTIFIER_KPN_TENSOR,
+         "NSS_KpnCoefficientsTensor",
          FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
+         tensorUsage,
          tensorFormatSingleChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
+         context->kpnDimension.width,
+         context->kpnDimension.height,
          1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
+         kpnTensorFlags,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
          1,
-         feedbackTensorChannel,
+         KpnTensorChannel,
          4},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_K0_TENSOR,
-         L"NSS_CoefficientsTensor_0",
-         FFX_RESOURCE_TYPE_TENSOR,
+        {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1,
+         "NSS_reconstructed_prev_depth",
+         FFX_RESOURCE_TYPE_TEXTURE2D,
          FFX_RESOURCE_USAGE_UAV,
-         tensorFormatQuadChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
-         1,
-         coefficientsTensorChannel,
-         4},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_K1_TENSOR,
-         L"NSS_CoefficientsTensor_1",
-         FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
-         tensorFormatQuadChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
-         1,
-         coefficientsTensorChannel,
-         4},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_K2_TENSOR,
-         L"NSS_CoefficientsTensor_2",
-         FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
-         tensorFormatQuadChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
-         1,
-         coefficientsTensorChannel,
-         4},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_K3_TENSOR,
-         L"NSS_CoefficientsTensor_3",
-         FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
-         tensorFormatQuadChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
-         1,
-         coefficientsTensorChannel,
-         4},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_K4_TENSOR,
-         L"NSS_CoefficientsTensor_4",
-         FFX_RESOURCE_TYPE_TENSOR,
-         FFX_RESOURCE_USAGE_UAV,
-         tensorFormatQuadChannel,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         aliasTensorAsImage ? FFX_RESOURCE_FLAGS_IMAGE_ALIASED : FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED},
-         1,
-         coefficientsTensorChannel,
-         4},
-        {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR,
-         L"NSS_padded_input_color_jittered",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1,
-         L"NSS_padded_input_depth_1",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R32_FLOAT,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2,
-         L"NSS_padded_input_depth_2",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R32_FLOAT,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS,
-         L"NSS_padded_input_motion_vectors",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R16G16_FLOAT,
-         context->paddedInputWidth,
-         context->paddedInputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1,
-         L"NSS_padded_upscaled_color_1",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-         context->paddedOutputWidth,
-         context->paddedOutputHeight,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-
-        {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2,
-         L"NSS_padded_upscaled_color_2",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         (FfxResourceUsage)(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV),
-         FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
-         context->paddedOutputWidth,
-         context->paddedOutputHeight,
+         FFX_SURFACE_FORMAT_R32_UINT,
+         context->depthScatterSize.width,
+         context->depthScatterSize.height,
          1,
          FFX_RESOURCE_FLAGS_NONE,
          {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
     };
 
+    const bool manageHistory = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) != 0;
+
+    // Persistent internal surfaces and
+    // - optional dynamic LUT if context->useDynamicOffsetLut is true.
+    // - optional disocclusion mask if context->useDisocclusionMaskPass is true.
+    // - 2 optional history as ring buffer if manageHistory is enabled.
+    constexpr uint32_t             MAX_INTERNAL_SURFACE_COUNT                      = FFX_COUNTOF(PersistentInternalSurfaceDesc) + 4;
+    FfxInternalResourceDescription internalSurfaceDesc[MAX_INTERNAL_SURFACE_COUNT] = {};
+    uint32_t                       internalSurfaceCount                            = 0;
+
+    const auto addInternalSurface = [&](const FfxInternalResourceDescription& desc) {
+        FFX_ASSERT(internalSurfaceCount < MAX_INTERNAL_SURFACE_COUNT);
+        internalSurfaceDesc[internalSurfaceCount++] = desc;
+    };
+
+    for (uint32_t i = 0; i < FFX_ARRAY_ELEMENTS(PersistentInternalSurfaceDesc); ++i)
+    {
+        addInternalSurface(PersistentInternalSurfaceDesc[i]);
+    }
+
+    if (context->useDynamicOffsetLut)
+    {
+        addInternalSurface({FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT,
+                            "NSS_OffsetLut",
+                            FFX_RESOURCE_TYPE_TEXTURE2D,
+                            FFX_RESOURCE_USAGE_UAV,
+                            FFX_SURFACE_FORMAT_R32G32B32A32_UINT,
+                            context->offsetLutSize.width,
+                            context->offsetLutSize.height,
+                            1,
+                            FFX_RESOURCE_FLAGS_NONE,
+                            {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}});
+    }
+
+    if (context->useDisocclusionMaskPass)
+    {
+        addInternalSurface({FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ,
+                            "NSS_disocclusion_mask",
+                            FFX_RESOURCE_TYPE_TEXTURE2D,
+                            disocclusionMaskOutputImageUsage,
+                            FFX_SURFACE_FORMAT_R8_UNORM,
+                            context->depthScatterSize.width,
+                            context->depthScatterSize.height,
+                            1,
+                            FFX_RESOURCE_FLAGS_NONE,
+                            {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}});
+    }
+
+    if (manageHistory)
+    {
+        addInternalSurface({FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1,
+                            "NSS_upscaled_color_1",
+                            FFX_RESOURCE_TYPE_TEXTURE2D,
+                            postProcessOutputImageUsage,
+                            FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
+                            displaySize.width,
+                            displaySize.height,
+                            1,
+                            FFX_RESOURCE_FLAGS_NONE,
+                            {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}});
+        addInternalSurface({FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2,
+                            "NSS_upscaled_color_2",
+                            FFX_RESOURCE_TYPE_TEXTURE2D,
+                            postProcessOutputImageUsage,
+                            FFX_SURFACE_FORMAT_R11G11B10_FLOAT,
+                            displaySize.width,
+                            displaySize.height,
+                            1,
+                            FFX_RESOURCE_FLAGS_NONE,
+                            {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}});
+    }
+
     // clear the SRV resources to NULL.
     memset(context->srvResources, 0, sizeof(context->srvResources));
 
     // Generally used resources by all presets
-    for (int32_t currentSurfaceIndex = 0; currentSurfaceIndex < FFX_ARRAY_ELEMENTS(internalSurfaceDesc); ++currentSurfaceIndex)
+    for (uint32_t currentSurfaceIndex = 0; currentSurfaceIndex < internalSurfaceCount; ++currentSurfaceIndex)
     {
         FFX_VALIDATE(createResourceFromDescription(context, &internalSurfaceDesc[currentSurfaceIndex]));
     }
 
     // copy resources to uavResrouces list
     memcpy(context->uavResources, context->srvResources, sizeof(context->srvResources));
-    //memcpy(context->tensorResources, context->srvResources, sizeof(context->srvResources));
+
+    // The external resources should not be created internally, just registered.
+    for (uint32_t i = 0; i < FFX_COUNTOF(externalCommonResources); ++i)
+    {
+        constexpr FfxResourceInternal emptyResource = {};
+        FFX_ASSERT(memcmp(&context->srvResources[externalCommonResources[i]], &emptyResource, sizeof(FfxResourceInternal)) == 0);
+        FFX_ASSERT(memcmp(&context->uavResources[externalCommonResources[i]], &emptyResource, sizeof(FfxResourceInternal)) == 0);
+    }
+
+    if (!manageHistory)
+    {
+        for (uint32_t i = 0; i < FFX_COUNTOF(externalCondtinalResources); ++i)
+        {
+            constexpr FfxResourceInternal emptyResource = {};
+            FFX_ASSERT(memcmp(&context->srvResources[externalCondtinalResources[i]], &emptyResource, sizeof(FfxResourceInternal)) == 0);
+            FFX_ASSERT(memcmp(&context->uavResources[externalCondtinalResources[i]], &emptyResource, sizeof(FfxResourceInternal)) == 0);
+        }
+    }
+
+    constexpr uint32_t     MAX_DATA_GRAPH_TENSOR_INFO                      = FFX_COUNTOF(srvTensorBindingTable) + FFX_COUNTOF(uavTensorBindingTable);
+    FfxDataGraphTensorInfo dataGraphTensorInfo[MAX_DATA_GRAPH_TENSOR_INFO] = {};
+    uint32_t               dataGraphTensorInfoCount                        = 0;
+    FFX_VALIDATE(
+        buildDataGraphTensorInfo(internalSurfaceDesc, internalSurfaceCount, dataGraphTensorInfo, MAX_DATA_GRAPH_TENSOR_INFO, &dataGraphTensorInfoCount));
 
     // avoid compiling pipelines on first render
     {
-        errorCode = createPipelineStates(context);
+        errorCode = createPipelineStates(context, dataGraphTensorInfo, dataGraphTensorInfoCount);
         FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
     }
     return FFX_OK;
@@ -716,11 +969,36 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
 
-    ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssMirrorPadding, context->effectContextId);
+    ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDepthScatter, context->effectContextId);
+    if (context->useDisocclusionMaskPass)
+    {
+        ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDisocclusionMask, context->effectContextId);
+    }
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssPreprocess, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDataGraph, context->effectContextId);
+    if (context->useDynamicOffsetLut)
+    {
+        ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssGenerateOffsetLut, context->effectContextId);
+    }
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssPostprocess, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDebugView, context->effectContextId);
+
+    // unregister resources not created internally
+    for (uint32_t i = 0; i < FFX_COUNTOF(externalCommonResources); ++i)
+    {
+        context->srvResources[externalCommonResources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
+        context->uavResources[externalCommonResources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
+    }
+
+    const bool manageHistory = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) != 0;
+    if (!manageHistory)
+    {
+        for (uint32_t i = 0; i < FFX_COUNTOF(externalCondtinalResources); ++i)
+        {
+            context->srvResources[externalCondtinalResources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
+            context->uavResources[externalCondtinalResources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
+        }
+    }
 
     // release internal resources
     for (int32_t currentResourceIndex = 0; currentResourceIndex < FFX_NSS_RESOURCE_IDENTIFIER_COUNT; ++currentResourceIndex)
@@ -728,64 +1006,10 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
         ffxSafeReleaseResource(&context->contextDescription.backendInterface, context->srvResources[currentResourceIndex], context->effectContextId);
     }
 
-    // unregister resources not created internally
-    constexpr uint32_t external_resources[] = {
-        FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR,
-        FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH,
-        FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION,
-        FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT,
-    };
-    for (uint32_t i = 0; i < FFX_COUNTOF(external_resources); ++i)
-    {
-        context->srvResources[external_resources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
-        context->uavResources[external_resources[i]] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
-    }
-
     // Destroy the context
     FFX_VALIDATE(context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId));
 
     return FFX_OK;
-}
-
-// Convert float32 to float16 (IEEE 754 half-precision)
-static uint16_t packfloat32ToUint16(float value)
-{
-    FfxUInt32 bits;
-    std::memcpy(&bits, &value, sizeof(bits));
-
-    FfxUInt32 sign     = (bits >> 31) & 0x1;
-    FfxInt32  exponent = ((bits >> 23) & 0xFF) - 127 + 15;
-    FfxUInt32 mantissa = bits & 0x7FFFFF;
-
-    if (exponent <= 0)
-    {
-        // Subnormal or zero
-        return static_cast<FfxUInt16>(sign << 15);
-    }
-    else if (exponent >= 31)
-    {
-        // Inf or NaN
-        return static_cast<FfxUInt16>((sign << 15) | (0x1F << 10));
-    }
-
-    // Round mantissa from 23 to 10 bits
-    mantissa = mantissa >> 13;
-    return static_cast<FfxUInt16>((sign << 15) | (exponent << 10) | mantissa);
-}
-
-// Pack two float32 values into one uint32 as float16
-static FfxUInt32 packTwoFloatsTo32bit(FfxFloat32 a, FfxFloat32 b)
-{
-    FfxUInt16 a16 = packfloat32ToUint16(a);
-    FfxUInt16 b16 = packfloat32ToUint16(b);
-    return (static_cast<FfxUInt32>(b16) << 16) | a16;
-}
-
-static FfxUInt32 packTwoUintsTo32bit(FfxUInt32 a, FfxUInt32 b)
-{
-    FfxUInt16 a16 = static_cast<FfxUInt16>(a);
-    FfxUInt16 b16 = static_cast<FfxUInt16>(b);
-    return (static_cast<FfxUInt32>(b16) << 16) | a16;
 }
 
 static void setupDeviceDepthToViewSpaceDepthParams(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
@@ -831,7 +1055,7 @@ static void setupDeviceDepthToViewSpaceDepthParams(FfxNssContext_Private* contex
     context->constants._DeviceToViewDepth[1] = matrix_elem_e[bInverted][bInfinite];
 
     // revert x and y coords
-    const float aspect      = context->paddedInputWidth / float(context->paddedInputHeight);
+    const float aspect      = params->renderSize.width / float(params->renderSize.height);
     const float cotHalfFovY = cosf(0.5f * params->cameraFovAngleVertical) / sinf(0.5f * params->cameraFovAngleVertical);
     const float a           = cotHalfFovY / aspect;
     const float b           = cotHalfFovY;
@@ -868,7 +1092,28 @@ static bool NeedResetHistory(FfxNssContext_Private* context, const FfxNssDispatc
     return context->firstExecution || params->reset;
 }
 
-static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, bool use16bit)
+static float ComputeDepthClipRequiredSepScale(NssConstants& constants, const FfxNssDispatchDescription* params)
+{
+    FFX_ASSERT(params);
+    const float half_viewport = sqrtf(float(params->renderSize.width * params->renderSize.width + params->renderSize.height * params->renderSize.height));
+    const float cornerViewDirLen =
+        sqrtf(constants._DeviceToViewDepth[2] * constants._DeviceToViewDepth[2] + constants._DeviceToViewDepth[3] * constants._DeviceToViewDepth[3] + 1.0f);
+
+    return 1.37e-05f * cornerViewDirLen * half_viewport;
+}
+
+static float ComputeDepthClipPower(const FfxNssDispatchDescription* params)
+{
+    FFX_ASSERT(params);
+    // Using the 1080x1920 as the reference viewport, where sqrt(1080^2 + 1920^2) = 2202.9071700822983f
+    constexpr float REFERENCE_VIEWPORT_LENGTH = 2202.9071700822983f;
+    const float     half_viewport = sqrtf(float(params->renderSize.width * params->renderSize.width + params->renderSize.height * params->renderSize.height));
+    const float     resolutionFactor = ffxMin(ffxMax(half_viewport / REFERENCE_VIEWPORT_LENGTH, 0.0f), 1.0f);
+
+    return 1.0f + (2.0f * resolutionFactor);
+}
+
+static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
 {
     NssConstants& constants        = context->constants;
     const bool    needResetHistory = NeedResetHistory(context, params);
@@ -880,35 +1125,41 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     // compute params to enable device depth to view space depth computation in shader
     setupDeviceDepthToViewSpaceDepthParams(context, params);
 
-    constants._InputDims[0]    = context->paddedInputWidth;
-    constants._InputDims[1]    = context->paddedInputHeight;
-    constants._InvInputDims[0] = 1.f / static_cast<float>(context->paddedInputWidth);
-    constants._InvInputDims[1] = 1.f / static_cast<float>(context->paddedInputHeight);
+    constants._InputDims[0]    = params->renderSize.width;
+    constants._InputDims[1]    = params->renderSize.height;
+    constants._InvInputDims[0] = 1.f / static_cast<float>(params->renderSize.width);
+    constants._InvInputDims[1] = 1.f / static_cast<float>(params->renderSize.height);
 
-    constants._OutputDims[0]    = context->paddedOutputWidth;
-    constants._OutputDims[1]    = context->paddedOutputHeight;
-    constants._InvOutputDims[0] = 1.f / static_cast<float>(context->paddedOutputWidth);
-    constants._InvOutputDims[1] = 1.f / static_cast<float>(context->paddedOutputHeight);
+    constants._OutputDims[0]    = params->upscaleSize.width;
+    constants._OutputDims[1]    = params->upscaleSize.height;
+    constants._InvOutputDims[0] = 1.f / static_cast<float>(params->upscaleSize.width);
+    constants._InvOutputDims[1] = 1.f / static_cast<float>(params->upscaleSize.height);
 
-    constants._UnpaddedInputDims[0] = params->renderSize.width;
-    constants._UnpaddedInputDims[1] = params->renderSize.height;
+    constants._InputTensorSize[0]    = context->dataGraphSize.width;
+    constants._InputTensorSize[1]    = context->dataGraphSize.height;
+    constants._InputTensorSizeRcp[0] = 1.0f / static_cast<float>(context->dataGraphSize.width);
+    constants._InputTensorSizeRcp[1] = 1.0f / static_cast<float>(context->dataGraphSize.height);
 
-    constants._UnpaddedOutputDims[0] = params->upscaleSize.width;
-    constants._UnpaddedOutputDims[1] = params->upscaleSize.height;
-
-    // The passed in jitter offset is in pixel space of unpadded render size
-    const float jitterUvX = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
-    const float jitterUvY = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
-    // JitterOffset in pixels
-    constants._JitterOffsetTm1[0] = constants._JitterOffset[0];
-    constants._JitterOffsetTm1[1] = constants._JitterOffset[1];
-    constants._JitterOffset[0]    = jitterUvX * static_cast<float>(context->paddedInputWidth);
-    constants._JitterOffset[1]    = jitterUvY * static_cast<float>(context->paddedInputHeight);
-    // JitterOffset in uv space
-    constants._JitterOffsetTm1[2] = constants._JitterOffset[2];
-    constants._JitterOffsetTm1[3] = constants._JitterOffset[3];
-    constants._JitterOffset[2]    = jitterUvX;
-    constants._JitterOffset[3]    = jitterUvY;
+    // JitterOffset in pixels/uv.
+    // On history reset, mirror current jitter into tm1 to avoid a mismatched first temporal phase.
+    if (needResetHistory)
+    {
+        constants._JitterOffsetTm1[0] = params->jitterOffset.x;
+        constants._JitterOffsetTm1[1] = params->jitterOffset.y;
+        constants._JitterOffsetTm1[2] = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
+        constants._JitterOffsetTm1[3] = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
+    }
+    else
+    {
+        constants._JitterOffsetTm1[0] = constants._JitterOffset[0];
+        constants._JitterOffsetTm1[1] = constants._JitterOffset[1];
+        constants._JitterOffsetTm1[2] = constants._JitterOffset[2];
+        constants._JitterOffsetTm1[3] = constants._JitterOffset[3];
+    }
+    constants._JitterOffset[0] = params->jitterOffset.x;
+    constants._JitterOffset[1] = params->jitterOffset.y;
+    constants._JitterOffset[2] = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
+    constants._JitterOffset[3] = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
 
     // Setup scale factor (.xy scale, .zw inv_scale)
     constants._ScaleFactor[0] = constants._OutputDims[0] / FfxFloat32(constants._InputDims[0]);
@@ -916,70 +1167,59 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     constants._ScaleFactor[2] = constants._InputDims[0] / FfxFloat32(constants._OutputDims[0]);
     constants._ScaleFactor[3] = constants._InputDims[1] / FfxFloat32(constants._OutputDims[1]);
 
-    // Setup motion vector scale. The passed in motion vectors are in pixel space of unpadded render size.
-    constants._MotionVectorScale[0] = params->motionVectorScale.x / params->renderSize.width;
-    constants._MotionVectorScale[1] = params->motionVectorScale.y / params->renderSize.height;
+    // Setup motion vector scale.
+    constants._MotionVectorScale[0] = params->motionVectorScale.x;
+    constants._MotionVectorScale[1] = params->motionVectorScale.y;
 
-    // These quantize parameters are copied from the metadata of the using model.
-    // Note that quantParamsSNORM.xy is not used because the input tensor’s shape cannot be aliased
-    // through a single image. Therefore, we consistently use the int format for the input.
-    constexpr FfxFloat32x4 quantParamsSNORM = {1.0f / 0.49803924513980746, -1.0078740157480315, 0.49999999813735485, -1.0f};
-    constexpr FfxFloat32x4 quantParamsSINT  = {1.0f / 0.003921568859368563, -128.0f, 0.003937007859349251, -127.0f};
-    const float            noHistoryReset   = needResetHistory ? 0.0f : 1.0f;
-    const float            exposure         = (params->exposure <= 0.0f) ? 1.0 : params->exposure;
-    const float            invExposure      = 1.f / exposure;
+    constants._PaddingScale[0] = constants._InputDims[0] / static_cast<float>(context->dataGraphSize.width);
+    constants._PaddingScale[1] = constants._InputDims[1] / static_cast<float>(context->dataGraphSize.height);
 
-    // These value comes from arm-model-zoo/models/super_sampling/ClampNet_v5_1/scenarios/1920x1088/end_to_end/push_consts_generator.py
-    // They are const or learned during training. Cannot be changed.
-    const float       motionVectorThreshold       = 0.01f;
-    const float       motionDisocclusionThreshold = 0.25f;
-    const float       disocclusionScale           = 0.725223958492279f;
-    const FfxUInt32x2 indexModulo                 = {2, 2};  // Hardcode to use 2x2 tile size.
+    constants._DepthTm1Size[0]    = context->depthScatterSize.width;
+    constants._DepthTm1Size[1]    = context->depthScatterSize.height;
+    constants._InvDepthTm1Size[0] = 1.f / static_cast<float>(context->depthScatterSize.width);
+    constants._InvDepthTm1Size[1] = 1.f / static_cast<float>(context->depthScatterSize.height);
 
-    FfxInt32x2 jitterTileOffset;
-    computeJitterTileOffset(constants._JitterOffset[0],
-                            constants._JitterOffset[1],
-                            constants._ScaleFactor[0],
-                            constants._ScaleFactor[1],
-                            indexModulo[0],
-                            indexModulo[1],
-                            jitterTileOffset);
+    constants._KpnDimension[0] = context->kpnDimension.width;
+    constants._KpnDimension[1] = context->kpnDimension.height;
 
-    if (use16bit)
+    constants._DepthClipRequiredSepScale = ComputeDepthClipRequiredSepScale(constants, params);
+    constants._DepthClipPower            = ComputeDepthClipPower(params);
+
+    // KPN scale for QUALITY mode tap-selection: kpnDims / paddedDims (= dataGraphSize)
+    constants._KpnScale[0] = (float)context->kpnDimension.width / (float)context->dataGraphSize.width;
+    constants._KpnScale[1] = (float)context->kpnDimension.height / (float)context->dataGraphSize.height;
+
+    constants._DebugViewMode =
+        std::clamp(params->debugViewMode, static_cast<uint32_t>(NSS_DEBUG_VIEW_MODE_ALL), static_cast<uint32_t>(NSS_DEBUG_VIEW_MODE_TENSOR_WARP_FEEDBACK));
+
+    const float noHistoryReset = needResetHistory ? 0.0f : 1.0f;
+    const float exposure       = (params->exposure <= 0.0f) ? float(std::exp(2.0)) : params->exposure;
+    const float invExposure    = 1.f / exposure;
+
+    const FfxUInt32x2 indexModulo        = {context->reducedFractionHrSize.width, context->reducedFractionHrSize.height};
+    const FfxUInt32x2 reducedInputModulo = {context->reducedFractionLrSize.width, context->reducedFractionLrSize.height};
+
+    FfxInt32x2 jitterTileOffset = {};
+    if (!context->useDynamicOffsetLut)
     {
-        constants.dynamicPrecision._16bit._QuantParamsSNORM[0]   = packTwoFloatsTo32bit(quantParamsSNORM[0], quantParamsSNORM[1]);
-        constants.dynamicPrecision._16bit._QuantParamsSNORM[1]   = packTwoFloatsTo32bit(quantParamsSNORM[2], quantParamsSNORM[3]);
-        constants.dynamicPrecision._16bit._QuantParamsSINT[0]    = packTwoFloatsTo32bit(quantParamsSINT[0], quantParamsSINT[1]);
-        constants.dynamicPrecision._16bit._QuantParamsSINT[1]    = packTwoFloatsTo32bit(quantParamsSINT[2], quantParamsSINT[3]);
-        constants.dynamicPrecision._16bit._Exposure              = packTwoFloatsTo32bit(exposure, invExposure);
-        constants.dynamicPrecision._16bit._MotionDisThreshPad[0] = packTwoFloatsTo32bit(motionVectorThreshold, motionDisocclusionThreshold);
-        constants.dynamicPrecision._16bit._MotionDisThreshPad[1] = packTwoFloatsTo32bit(disocclusionScale, 0.0f);
-        constants.dynamicPrecision._16bit._IndexModulo           = packTwoUintsTo32bit(indexModulo[0], indexModulo[1]);
-        constants.dynamicPrecision._16bit._LutOffset             = packTwoUintsTo32bit(jitterTileOffset[0], jitterTileOffset[1]);
-        constants.dynamicPrecision._16bit._NotHistoryReset       = packTwoFloatsTo32bit(noHistoryReset, 0.0f);
+        computeJitterTileOffset(constants._JitterOffset[0],
+                                constants._JitterOffset[1],
+                                constants._ScaleFactor[0],
+                                constants._ScaleFactor[1],
+                                indexModulo[0],
+                                indexModulo[1],
+                                jitterTileOffset);
     }
-    else
-    {
-        constants.dynamicPrecision._32bit._QuantParamsSNORM[0]   = quantParamsSNORM[0];
-        constants.dynamicPrecision._32bit._QuantParamsSNORM[1]   = quantParamsSNORM[1];
-        constants.dynamicPrecision._32bit._QuantParamsSNORM[2]   = quantParamsSNORM[2];
-        constants.dynamicPrecision._32bit._QuantParamsSNORM[3]   = quantParamsSNORM[3];
-        constants.dynamicPrecision._32bit._QuantParamsSINT[0]    = quantParamsSINT[0];
-        constants.dynamicPrecision._32bit._QuantParamsSINT[1]    = quantParamsSINT[1];
-        constants.dynamicPrecision._32bit._QuantParamsSINT[2]    = quantParamsSINT[2];
-        constants.dynamicPrecision._32bit._QuantParamsSINT[3]    = quantParamsSINT[3];
-        constants.dynamicPrecision._32bit._Exposure[0]           = exposure;
-        constants.dynamicPrecision._32bit._Exposure[1]           = invExposure;
-        constants.dynamicPrecision._32bit._MotionDisThreshPad[0] = motionVectorThreshold;
-        constants.dynamicPrecision._32bit._MotionDisThreshPad[1] = motionDisocclusionThreshold;
-        constants.dynamicPrecision._32bit._MotionDisThreshPad[2] = disocclusionScale;
-        constants.dynamicPrecision._32bit._MotionDisThreshPad[3] = 0.0f;
-        constants.dynamicPrecision._32bit._IndexModulo[0]        = indexModulo[0];
-        constants.dynamicPrecision._32bit._IndexModulo[1]        = indexModulo[1];
-        constants.dynamicPrecision._32bit._LutOffset[0]          = jitterTileOffset[0];
-        constants.dynamicPrecision._32bit._LutOffset[1]          = jitterTileOffset[1];
-        constants.dynamicPrecision._32bit._NotHistoryReset       = noHistoryReset;
-    }
+
+    constants._Exposure[0]           = exposure;
+    constants._Exposure[1]           = invExposure;
+    constants._IndexModulo[0]        = indexModulo[0];
+    constants._IndexModulo[1]        = indexModulo[1];
+    constants._ReducedInputModulo[0] = reducedInputModulo[0];
+    constants._ReducedInputModulo[1] = reducedInputModulo[1];
+    constants._LutOffset[0]          = jitterTileOffset[0];
+    constants._LutOffset[1]          = jitterTileOffset[1];
+    constants._NotHistoryReset       = noHistoryReset;
 
     // initialize constantBuffers data
     FFX_ASSERT(context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
@@ -994,12 +1234,15 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
                              const FfxPipelineState*          pipeline,
                              uint32_t                         dispatchX,
                              uint32_t                         dispatchY,
-                             wchar_t*                         debugName)
+                             const char*                      debugName)
 {
     FfxGpuJobDescription dispatchJob = {FFX_GPU_JOB_COMPUTE};
     if (debugName != nullptr)
     {
-        wcscpy(dispatchJob.jobLabel, debugName);
+#ifdef FFX_DEBUG
+        strncpy(dispatchJob.jobLabel, debugName, FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.jobLabel[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+#endif
     }
 
     for (uint32_t currentShaderResourceViewIndex = 0; currentShaderResourceViewIndex < pipeline->srvTextureCount; ++currentShaderResourceViewIndex)
@@ -1008,8 +1251,10 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
         const FfxResourceInternal currentResource   = context->srvResources[currentResourceId];
         dispatchJob.computeJobDescriptor.srvTextures[currentShaderResourceViewIndex].resource = currentResource;
 #ifdef FFX_DEBUG
-        wcscpy(dispatchJob.computeJobDescriptor.srvTextures[currentShaderResourceViewIndex].name,
-               pipeline->srvTextureBindings[currentShaderResourceViewIndex].name);
+        strncpy(dispatchJob.computeJobDescriptor.srvTextures[currentShaderResourceViewIndex].name,
+                pipeline->srvTextureBindings[currentShaderResourceViewIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.computeJobDescriptor.srvTextures[currentShaderResourceViewIndex].name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
     }
 
@@ -1017,8 +1262,10 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
     {
         const uint32_t currentResourceId = pipeline->uavTextureBindings[currentUnorderedAccessViewIndex].resourceIdentifier;
 #ifdef FFX_DEBUG
-        wcscpy(dispatchJob.computeJobDescriptor.uavTextureNames[currentUnorderedAccessViewIndex],
-               pipeline->uavTextureBindings[currentUnorderedAccessViewIndex].name);
+        strncpy(dispatchJob.computeJobDescriptor.uavTextureNames[currentUnorderedAccessViewIndex],
+                pipeline->uavTextureBindings[currentUnorderedAccessViewIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.computeJobDescriptor.uavTextureNames[currentUnorderedAccessViewIndex][FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
 
         {
@@ -1028,13 +1275,32 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
         }
     }
 
+    // SRV buffers
+    for (uint32_t index = 0; index < pipeline->srvBufferCount; ++index)
+    {
+        const uint32_t            currentResourceId                 = pipeline->srvBufferBindings[index].resourceIdentifier;
+        const FfxResourceInternal currentResource                   = context->srvResources[currentResourceId];
+        dispatchJob.computeJobDescriptor.srvBuffers[index].resource = currentResource;
+    }
+
+    // UAV buffers
+    for (uint32_t index = 0; index < pipeline->uavBufferCount; ++index)
+    {
+        const uint32_t            currentResourceId                 = pipeline->uavBufferBindings[index].resourceIdentifier;
+        const FfxResourceInternal currentResource                   = context->uavResources[currentResourceId];
+        dispatchJob.computeJobDescriptor.uavBuffers[index].resource = currentResource;
+    }
+
     for (uint32_t currentTensorIndex = 0; currentTensorIndex < pipeline->srvTensorCount; ++currentTensorIndex)
     {
         const uint32_t            currentResourceId                              = pipeline->srvTensorBindings[currentTensorIndex].resourceIdentifier;
         const FfxResourceInternal currentResource                                = context->srvResources[currentResourceId];
         dispatchJob.computeJobDescriptor.srvTensors[currentTensorIndex].resource = currentResource;
 #ifdef FFX_DEBUG
-        wcscpy(dispatchJob.computeJobDescriptor.srvTensors[currentTensorIndex].name, pipeline->srvTensorBindings[currentTensorIndex].name);
+        strncpy(dispatchJob.computeJobDescriptor.srvTensors[currentTensorIndex].name,
+                pipeline->srvTensorBindings[currentTensorIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.computeJobDescriptor.srvTensors[currentTensorIndex].name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
     }
 
@@ -1044,7 +1310,10 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
         const FfxResourceInternal currentResource                                = context->uavResources[currentResourceId];
         dispatchJob.computeJobDescriptor.uavTensors[currentTensorIndex].resource = currentResource;
 #ifdef FFX_DEBUG
-        wcscpy(dispatchJob.computeJobDescriptor.uavTensors[currentTensorIndex].name, pipeline->uavTensorBindings[currentTensorIndex].name);
+        strncpy(dispatchJob.computeJobDescriptor.uavTensors[currentTensorIndex].name,
+                pipeline->uavTensorBindings[currentTensorIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.computeJobDescriptor.uavTensors[currentTensorIndex].name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
     }
 
@@ -1055,7 +1324,12 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
 
     for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex < pipeline->constCount; ++currentRootConstantIndex)
     {
-        wcscpy(dispatchJob.computeJobDescriptor.cbNames[currentRootConstantIndex], pipeline->constantBufferBindings[currentRootConstantIndex].name);
+#ifdef FFX_DEBUG
+        strncpy(dispatchJob.computeJobDescriptor.cbNames[currentRootConstantIndex],
+                pipeline->constantBufferBindings[currentRootConstantIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dispatchJob.computeJobDescriptor.cbNames[currentRootConstantIndex][FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+#endif
         dispatchJob.computeJobDescriptor.cbs[currentRootConstantIndex] =
             context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
     }
@@ -1063,12 +1337,104 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
     FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob) == FFX_OK);
 }
 
-static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, FfxPipelineState* pipeline, wchar_t* debugName)
+static void scheduleFragment(FfxNssContext_Private*           context,
+                             const FfxNssDispatchDescription* params,
+                             const FfxPipelineState*          pipeline,
+                             uint32_t                         width,
+                             uint32_t                         height,
+                             const char*                      debugName)
+{
+    FFX_UNUSED(params);
+
+    FfxGpuJobDescription fragmentJob = {FFX_GPU_JOB_FRAGMENT};
+    if (debugName != nullptr)
+    {
+#ifdef FFX_DEBUG
+        strncpy(fragmentJob.jobLabel, debugName, FFX_RESOURCE_NAME_SIZE - 1);
+        fragmentJob.jobLabel[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+#endif
+    }
+
+    for (uint32_t currentShaderResourceViewIndex = 0; currentShaderResourceViewIndex < pipeline->srvTextureCount; ++currentShaderResourceViewIndex)
+    {
+        const uint32_t            currentResourceId = pipeline->srvTextureBindings[currentShaderResourceViewIndex].resourceIdentifier;
+        const FfxResourceInternal currentResource   = context->srvResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.srvTextures[currentShaderResourceViewIndex].resource = currentResource;
+    }
+
+    for (uint32_t currentUnorderedAccessViewIndex = 0; currentUnorderedAccessViewIndex < pipeline->uavTextureCount; ++currentUnorderedAccessViewIndex)
+    {
+        const uint32_t            currentResourceId = pipeline->uavTextureBindings[currentUnorderedAccessViewIndex].resourceIdentifier;
+        const FfxResourceInternal currentResource   = context->uavResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.uavTextures[currentUnorderedAccessViewIndex].resource = currentResource;
+        fragmentJob.fragmentJobDescriptor.uavTextures[currentUnorderedAccessViewIndex].mip      = 0;
+    }
+
+    // SRV buffers
+    for (uint32_t index = 0; index < pipeline->srvBufferCount; ++index)
+    {
+        const uint32_t            currentResourceId                  = pipeline->srvBufferBindings[index].resourceIdentifier;
+        const FfxResourceInternal currentResource                    = context->srvResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.srvBuffers[index].resource = currentResource;
+    }
+
+    // UAV buffers
+    for (uint32_t index = 0; index < pipeline->uavBufferCount; ++index)
+    {
+        const uint32_t            currentResourceId                  = pipeline->uavBufferBindings[index].resourceIdentifier;
+        const FfxResourceInternal currentResource                    = context->uavResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.uavBuffers[index].resource = currentResource;
+    }
+
+    for (uint32_t currentRenderTargetIndex = 0; currentRenderTargetIndex < pipeline->rtCount; ++currentRenderTargetIndex)
+    {
+        const uint32_t            currentResourceId                                     = pipeline->rtBindings[currentRenderTargetIndex].resourceIdentifier;
+        const FfxResourceInternal currentResource                                       = context->uavResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.rtTextures[currentRenderTargetIndex].resource = currentResource;
+    }
+
+    for (uint32_t currentTensorIndex = 0; currentTensorIndex < pipeline->srvTensorCount; ++currentTensorIndex)
+    {
+        const uint32_t            currentResourceId                               = pipeline->srvTensorBindings[currentTensorIndex].resourceIdentifier;
+        const FfxResourceInternal currentResource                                 = context->srvResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.srvTensors[currentTensorIndex].resource = currentResource;
+    }
+
+    for (uint32_t currentTensorIndex = 0; currentTensorIndex < pipeline->uavTensorCount; ++currentTensorIndex)
+    {
+        const uint32_t            currentResourceId                               = pipeline->uavTensorBindings[currentTensorIndex].resourceIdentifier;
+        const FfxResourceInternal currentResource                                 = context->uavResources[currentResourceId];
+        fragmentJob.fragmentJobDescriptor.uavTensors[currentTensorIndex].resource = currentResource;
+    }
+
+    fragmentJob.fragmentJobDescriptor.viewport[0] = width;
+    fragmentJob.fragmentJobDescriptor.viewport[1] = height;
+    fragmentJob.fragmentJobDescriptor.pipeline    = *pipeline;
+
+    for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex < pipeline->constCount; ++currentRootConstantIndex)
+    {
+#ifdef FFX_DEBUG
+        strncpy(fragmentJob.fragmentJobDescriptor.cbNames[currentRootConstantIndex],
+                pipeline->constantBufferBindings[currentRootConstantIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        fragmentJob.fragmentJobDescriptor.cbNames[currentRootConstantIndex][FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+#endif
+        fragmentJob.fragmentJobDescriptor.cbs[currentRootConstantIndex] =
+            context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
+    }
+
+    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &fragmentJob) == FFX_OK);
+}
+
+static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, FfxPipelineState* pipeline, const char* debugName)
 {
     FfxGpuJobDescription dataGraphJob = {FFX_GPU_JOB_DATA_GRAPH};
     if (debugName != nullptr)
     {
-        wcscpy(dataGraphJob.jobLabel, debugName);
+#ifdef FFX_DEBUG
+        strncpy(dataGraphJob.jobLabel, debugName, FFX_RESOURCE_NAME_SIZE - 1);
+        dataGraphJob.jobLabel[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
+#endif
     }
 
     for (uint32_t currentTensorIndex = 0; currentTensorIndex < pipeline->srvTensorCount; ++currentTensorIndex)
@@ -1077,7 +1443,10 @@ static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispat
         const FfxResourceInternal currentResource                                    = context->srvResources[currentResourceId];
         dataGraphJob.dataGraphJobDescription.srvTensors[currentTensorIndex].resource = currentResource;
 #ifdef FFX_DEBUG
-        wcscpy(dataGraphJob.dataGraphJobDescription.srvTensors[currentTensorIndex].name, pipeline->srvTensorBindings[currentTensorIndex].name);
+        strncpy(dataGraphJob.dataGraphJobDescription.srvTensors[currentTensorIndex].name,
+                pipeline->srvTensorBindings[currentTensorIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dataGraphJob.dataGraphJobDescription.srvTensors[currentTensorIndex].name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
     }
 
@@ -1087,7 +1456,10 @@ static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispat
         const FfxResourceInternal currentResource                                    = context->uavResources[currentResourceId];
         dataGraphJob.dataGraphJobDescription.uavTensors[currentTensorIndex].resource = currentResource;
 #ifdef FFX_DEBUG
-        wcscpy(dataGraphJob.dataGraphJobDescription.uavTensors[currentTensorIndex].name, pipeline->uavTensorBindings[currentTensorIndex].name);
+        strncpy(dataGraphJob.dataGraphJobDescription.uavTensors[currentTensorIndex].name,
+                pipeline->uavTensorBindings[currentTensorIndex].name,
+                FFX_RESOURCE_NAME_SIZE - 1);
+        dataGraphJob.dataGraphJobDescription.uavTensors[currentTensorIndex].name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 #endif
     }
 
@@ -1101,9 +1473,26 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     FFX_ASSERT(context);
     FFX_ASSERT(params);
 
-    if ((context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING)
+    if ((params->flags & FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING)
     {
         nssDebugCheckDispatch(context, params);
+    }
+
+    // validate the required textures are provided
+    FFX_RETURN_ON_ERROR(params->color.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(params->depth.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(params->motionVectors.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(params->output.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    const bool hasDebugView = (params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW;
+    if (hasDebugView)
+    {
+        FFX_RETURN_ON_ERROR(params->debugViews.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    }
+
+    const bool manageHistory = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) != 0;
+    if (!manageHistory)
+    {
+        FFX_RETURN_ON_ERROR(params->outputTm1.resource != NULL, FFX_ERROR_INVALID_POINTER);
     }
 
     // take a short cut to the command list
@@ -1117,21 +1506,25 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     const bool resetAccumulation = NeedResetHistory(context, params);
     if (resetAccumulation)
     {
-        constexpr uint32_t resources_to_clear[] = {FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1,
-                                                   FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2};
+        constexpr uint32_t always_clear_resources[] = {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
+                                                       FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2,
+                                                       FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD,
+                                                       FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR};
 
-        for (uint32_t i = 0; i < FFX_COUNTOF(resources_to_clear); ++i)
+        for (uint32_t i = 0; i < FFX_COUNTOF(always_clear_resources); ++i)
         {
-            clearJob.clearJobDescriptor.target = context->srvResources[resources_to_clear[i]];
+            clearJob.clearJobDescriptor.target = context->srvResources[always_clear_resources[i]];
             FFX_VALIDATE(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob));
+        }
+
+        if (manageHistory)
+        {
+            constexpr uint32_t history_resources[] = {FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1, FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2};
+            for (uint32_t i = 0; i < FFX_COUNTOF(history_resources); ++i)
+            {
+                clearJob.clearJobDescriptor.target = context->srvResources[history_resources[i]];
+                FFX_VALIDATE(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob));
+            }
         }
     }
 
@@ -1140,70 +1533,65 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
 
     const uint32_t lumaDerivSrvResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2 : FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1;
     const uint32_t lumaDerivUavResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1 : FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2;
-    const uint32_t feedbackTm1ResourceIndex  = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2 : FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1;
-    const uint32_t feedbackResourceIndex     = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_1 : FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR_2;
-    const uint32_t depthOffsetTm1ResourceIndex =
-        isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2 : FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1;
-    const uint32_t depthOffsetResourceIndex =
-        isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_1 : FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_2;
+    const uint32_t uavHistoryResourceIndex   = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1 : FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2;
+    const uint32_t srvHistoryResourceIndex   = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2 : FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1;
+    const bool     preProcessUseFragment     = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
 
-    const uint32_t outputResourceIndex  = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2;
-    const uint32_t historyResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_2 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_OUTPUT_1;
-
-    const uint32_t depthResourceIndex    = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2;
-    const uint32_t depthTm1ResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_2 : FFX_NSS_RESOURCE_IDENTIFIER_PADDED_DEPTH_1;
-
-    // Setup the resources for mirror padding and pre-process stage
+    // Setup the resources for pre-process stage
     {
         // Input: Depth tm1
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1] = context->srvResources[depthTm1ResourceIndex];
+        // This is already setup in nssCreate(), nothing to do here.
 
         // Input: Depth
-        // The extenral depth is registered as unpadded depth, the mirror padding pass will write the padded depth to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH
-        // and the NSS preprocess pass will read FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH.
         FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
                                                                                      &params->depth,
                                                                                      context->effectContextId,
-                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_DEPTH]));
-        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH] = context->uavResources[depthResourceIndex];
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH] = context->srvResources[depthResourceIndex];
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH]));
 
         // Input: Color
-        // The external color is registered as unpadded color, the mirror padding pass will write the padded color to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR
         FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
                                                                                      &params->color,
                                                                                      context->effectContextId,
-                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_COLOR]));
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_COLOR]));
 
         // Input: Motion vector
-        // The external motion is registered as unppaded motion, the mirror padding pass will write the padded motion to FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS
         FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
                                                                                      &params->motionVectors,
                                                                                      context->effectContextId,
-                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_MOTION]));
+                                                                                     &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_MOTION_VECTORS]));
 
         // Input: History
-        // History will use the padded history generated by last frame.
-        FFX_ASSERT(context->uavResources[historyResourceIndex].internalIndex == context->srvResources[historyResourceIndex].internalIndex);
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR] = context->srvResources[historyResourceIndex];
-
-        // Input: DepthOffset tm1
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD_TM1] = context->srvResources[depthOffsetTm1ResourceIndex];
+        if (manageHistory)
+        {
+            // History will use the upscaled output generated by last frame.
+            context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR] = context->srvResources[srvHistoryResourceIndex];
+        }
+        else
+        {
+            FFX_VALIDATE(
+                context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                &params->outputTm1,
+                                                                                context->effectContextId,
+                                                                                &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR]));
+        }
 
         // Input: Feedback tm1
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR] = context->srvResources[feedbackTm1ResourceIndex];
+        // This is already setup in nssCreate(), nothing to do here.
 
         // Input: LumaDeriv tm1
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV] = context->srvResources[lumaDerivSrvResourceIndex];
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_TM1] = context->srvResources[lumaDerivSrvResourceIndex];
 
         // Output: LumaDeriv, consumed by next frame
         context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV] = context->uavResources[lumaDerivUavResourceIndex];
 
+        // Current-frame LumaDeriv as an SRV alias (debug view reads the value pre-process wrote this frame).
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV] = context->srvResources[lumaDerivUavResourceIndex];
+
         // Output: data graph input tensor
         // This is already setup in nssCreate(), nothing to do here.
 
-        // Output: Depth offset, consumed by next frame and post-process stage
-        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD] = context->uavResources[depthOffsetResourceIndex];
+        // Output: Depth offset, consumed by post-process stage
+        // This is already setup in nssCreate(), nothing to do here.
     }
 
     // Setup the resources for data graph stage
@@ -1212,63 +1600,134 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
         // This is already setup in nssCreate(), nothing to do here.
 
         // Output: Feedback tensor, consumed by next frame.
-        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR] = context->uavResources[feedbackResourceIndex];
+        // This is already setup in nssCreate(), nothing to do here.
 
-        // Output: Coefficients tensors, consumed by post-process stage
+        // Output: KPN coefficients tensor, consumed by post-process stage
         // This is already setup in nssCreate(), nothing to do here.
     }
 
     // Setup the resources for post-process stage
     {
-        // Input: Coefficients tensors, outputted by data graph stage
+        // Input: KPN coefficients tensor (KPN_TENSOR), outputted by data graph stage
         // This is already setup in nssCreate(), nothing to do here.
 
-        // Input: Kernel LUT is baked in shader code, no work to do here.
+        // Input: Temporal feedback = current frame's feedback output by data graph.
+        // This is already setup in nssCreate(), nothing to do here.
+
+        // Input: Offset LUT is baked in shader code for exact x2, or generated into OFFSET_LUT for general ratios.
 
         // Input: Depth offset, outputted by pre-process stage
-        FFX_ASSERT(context->uavResources[depthOffsetResourceIndex].internalIndex == context->srvResources[depthOffsetResourceIndex].internalIndex);
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD] = context->srvResources[depthOffsetResourceIndex];
+        // This is already setup in nssCreate(), nothing to do here.
 
         // Input: Color, already setup in pre-process stage, nothing to do here.
         // Input: Motion vector, already setup in pre-process stage, nothing to do here.
         // Input: History, already setup in pre-process stage, nothing to do here.
 
-        // Output: Upscaled padded output
-        // upscaled output resource id is already setup in nssCreate(), we register the external output resource to unppaded output resource id.
-        FFX_ASSERT(context->uavResources[outputResourceIndex].internalIndex == context->srvResources[outputResourceIndex].internalIndex);
-        context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->uavResources[outputResourceIndex];
-        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->srvResources[outputResourceIndex];
+        if (manageHistory)
+        {
+            // Output: history buffer for next frame use
+            context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR] = context->uavResources[uavHistoryResourceIndex];
+        }
 
-        // Output: User unpadded output
+        // Output: Upscaled output
         FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
                                                                                      &params->output,
                                                                                      context->effectContextId,
-                                                                                     &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UNPADDED_OUTPUT]));
+                                                                                     &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT]));
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT];
     }
 
-    const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(context->paddedInputWidth, FFX_NSS_THREAD_GROUP_WIDTH);
-    const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(context->paddedInputHeight, FFX_NSS_THREAD_GROUP_HEIGHT);
-    const int32_t dispatchDstX = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputWidth, FFX_NSS_THREAD_GROUP_WIDTH);
-    const int32_t dispatchDstY = FFX_DIVIDE_ROUNDING_UP(context->paddedOutputHeight, FFX_NSS_THREAD_GROUP_HEIGHT);
+    setupConstantBuffer(context, params);
 
-    const bool require16bit = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT) == FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
-    const bool use16bit     = require16bit && context->deviceCapabilities.fp16Supported;
-    setupConstantBuffer(context, params, use16bit);
+    // Depth scatter
+    {
+        FfxGpuJobDescription clearJob     = {FFX_GPU_JOB_CLEAR_UINT};
+        const bool           reverseDepth = (context->pipelineFlags & NSS_SHADER_PERMUTATION_REVERSE_Z) != 0;
+        if (reverseDepth)
+        {
+            const uint32_t clearValuesToMinInt[]{0x0, 0x0, 0x0, 0x0};
+            memcpy(clearJob.clearUintJobDescriptor.color, clearValuesToMinInt, 4 * sizeof(uint32_t));
+        }
+        else
+        {
+            const uint32_t clearValuesToMaxInt[]{0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
+            memcpy(clearJob.clearUintJobDescriptor.color, clearValuesToMaxInt, 4 * sizeof(uint32_t));
+        }
 
-    scheduleDispatch(context, params, &context->pipelineNssMirrorPadding, dispatchSrcX, dispatchSrcY, L"MirrorPadding");
+        clearJob.clearUintJobDescriptor.target = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1];
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob));
 
-    scheduleDispatch(context, params, &context->pipelineNssPreprocess, dispatchSrcX, dispatchSrcY, L"Preprocess");
+        const int32_t dispatchX = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+        const int32_t dispatchY = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
+        scheduleDispatch(context, params, &context->pipelineNssDepthScatter, dispatchX, dispatchY, "DepthScatter");
+    }
 
-    scheduleDataGraph(context, params, &context->pipelineNssDataGraph, L"DataGraph");
+    if (context->useDisocclusionMaskPass)
+    {
+        if (preProcessUseFragment)
+        {
+            scheduleFragment(
+                context, params, &context->pipelineNssDisocclusionMask, context->depthScatterSize.width, context->depthScatterSize.height, "DisocclusionMask");
+        }
+        else
+        {
+            const int32_t dispatchX = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+            const int32_t dispatchY = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
+            scheduleDispatch(context, params, &context->pipelineNssDisocclusionMask, dispatchX, dispatchY, "DisocclusionMask");
+        }
+    }
 
-    scheduleDispatch(context, params, &context->pipelineNssPostprocess, dispatchDstX, dispatchDstY, L"Postprocess");
+    if (preProcessUseFragment)
+    {
+        scheduleFragment(context, params, &context->pipelineNssPreprocess, context->dataGraphSize.width, context->dataGraphSize.height, "Preprocess");
+    }
+    else
+    {
+        const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(context->dataGraphSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+        const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(context->dataGraphSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
+        scheduleDispatch(context, params, &context->pipelineNssPreprocess, dispatchSrcX, dispatchSrcY, "Preprocess");
+    }
 
-    const bool hasDebugView = (params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) == FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW;
+    scheduleDataGraph(context, params, &context->pipelineNssDataGraph, "DataGraph");
+
+    if (context->useDynamicOffsetLut)
+    {
+        const uint32_t tileCount    = context->reducedFractionHrSize.width * context->reducedFractionHrSize.height;
+        const uint32_t dispatchLutX = FFX_DIVIDE_ROUNDING_UP(tileCount, 64u);
+        scheduleDispatch(context, params, &context->pipelineNssGenerateOffsetLut, dispatchLutX, 1, "GenerateOffsetLut");
+    }
+
+    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    if (postProcessUseFragment)
+    {
+        scheduleFragment(context, params, &context->pipelineNssPostprocess, params->upscaleSize.width, params->upscaleSize.height, "Postprocess");
+    }
+    else
+    {
+        const int32_t dispatchDstX = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+        const int32_t dispatchDstY = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
+        scheduleDispatch(context, params, &context->pipelineNssPostprocess, dispatchDstX, dispatchDstY, "Postprocess");
+    }
+
     if (hasDebugView)
     {
-        const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(params->renderSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
-        const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(params->renderSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-        scheduleDispatch(context, params, &context->pipelineNssDebugView, dispatchSrcX, dispatchSrcY, L"DebugView");
+        FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                     &params->debugViews,
+                                                                                     context->effectContextId,
+                                                                                     &context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS]));
+        context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS] = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS];
+
+        // Assume the debug view compute/fragment choice is same as the post process.
+        if (postProcessUseFragment)
+        {
+            scheduleFragment(context, params, &context->pipelineNssDebugView, params->upscaleSize.width, params->upscaleSize.height, "DebugView");
+        }
+        else
+        {
+            const int32_t dispatchDbgX = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
+            const int32_t dispatchDbgY = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
+            scheduleDispatch(context, params, &context->pipelineNssDebugView, dispatchDbgX, dispatchDbgY, "DebugView");
+        }
     }
 
     context->resourceFrameIndex = (context->resourceFrameIndex + 1) % NSS_MAX_QUEUED_FRAMES;
@@ -1288,23 +1747,29 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
 
 FfxErrorCode ffxNssContextCreate(FfxNssContext* context, const FfxNssContextDescription* contextDescription)
 {
+    // check pointers are valid.
+    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
     // zero context memory
     memset(context, 0, sizeof(FfxNssContext));
 
-    // check pointers are valid.
-    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
     FFX_RETURN_ON_ERROR(contextDescription, FFX_ERROR_INVALID_POINTER);
 
     // validate that all callbacks are set for the interface
-    FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpGetDeviceCapabilities, FFX_ERROR_INCOMPLETE_INTERFACE);
     FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpCreateBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
     FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpDestroyBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
 
     // validate prarmeters
-    FFX_RETURN_ON_ERROR(contextDescription->maxRenderSize.width, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->maxRenderSize.height, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->maxUpscaleSize.width, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->maxUpscaleSize.height, FFX_ERROR_INVALID_ALIGNMENT);
+    FFX_RETURN_ON_ERROR(contextDescription->renderSize.width, FFX_ERROR_INVALID_ALIGNMENT);
+    FFX_RETURN_ON_ERROR(contextDescription->renderSize.height, FFX_ERROR_INVALID_ALIGNMENT);
+    FFX_RETURN_ON_ERROR(contextDescription->upscaleSize.width, FFX_ERROR_INVALID_ALIGNMENT);
+    FFX_RETURN_ON_ERROR(contextDescription->upscaleSize.height, FFX_ERROR_INVALID_ALIGNMENT);
+
+    // With single-step mirror mapping in preprocess shader, we require the aligned tensor extent
+    // to stay within 2x render extent per axis. For align-up padding this is guaranteed when
+    // render size is at least half the alignment.
+    constexpr uint32_t kMinRenderSizeForMirror = (FFX_NSS_RESOURCE_ALIGNMENT + 1u) / 2u;
+    FFX_RETURN_ON_ERROR(contextDescription->renderSize.width >= kMinRenderSizeForMirror, FFX_ERROR_INVALID_ARGUMENT);
+    FFX_RETURN_ON_ERROR(contextDescription->renderSize.height >= kMinRenderSizeForMirror, FFX_ERROR_INVALID_ARGUMENT);
 
     // if a scratch buffer is declared, then we must have a size
     if (contextDescription->backendInterface.scratchBuffer)
@@ -1347,12 +1812,10 @@ FfxErrorCode ffxNssContextDispatch(FfxNssContext* context, const FfxNssDispatchD
     FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.height, FFX_ERROR_INVALID_ARGUMENT);
 
     // validate that renderSize/upscaleSize match the size declared at context creation.
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.width == contextPrivate->contextDescription.maxRenderSize.width, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.height == contextPrivate->contextDescription.maxRenderSize.height, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.width == contextPrivate->contextDescription.maxUpscaleSize.width, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.height == contextPrivate->contextDescription.maxUpscaleSize.height, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(contextPrivate->device, FFX_ERROR_NULL_DEVICE);
-
+    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.width == contextPrivate->contextDescription.renderSize.width, FFX_ERROR_OUT_OF_RANGE);
+    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.height == contextPrivate->contextDescription.renderSize.height, FFX_ERROR_OUT_OF_RANGE);
+    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.width == contextPrivate->contextDescription.upscaleSize.width, FFX_ERROR_OUT_OF_RANGE);
+    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.height == contextPrivate->contextDescription.upscaleSize.height, FFX_ERROR_OUT_OF_RANGE);
     FFX_RETURN_ON_ERROR(contextPrivate->device, FFX_ERROR_NULL_DEVICE);
 
     // dispatch the NSS passes.
@@ -1393,6 +1856,23 @@ FfxErrorCode ffxNssGetJitterOffset(float* outX, float* outY, int32_t index, int3
 
     *outX = x;
     *outY = y;
+    return FFX_OK;
+}
+
+FFX_API FfxErrorCode ffxNssGetPipelineStageInfo(FfxNssContext* pContext, bool* pOutPreProcessUsesFragment, bool* pOutPostProcessUsesFragment)
+{
+    FFX_RETURN_ON_ERROR(pContext, FFX_ERROR_INVALID_POINTER);
+
+    const FfxNssContext_Private* context = reinterpret_cast<const FfxNssContext_Private*>(pContext);
+
+    if (pOutPreProcessUsesFragment != nullptr)
+    {
+        *pOutPreProcessUsesFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
+    }
+    if (pOutPostProcessUsesFragment != nullptr)
+    {
+        *pOutPostProcessUsesFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    }
     return FFX_OK;
 }
 

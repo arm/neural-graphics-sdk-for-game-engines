@@ -18,26 +18,47 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #include "ffx_shader_blobs.h"
 
+#if defined(FFX_FI) || defined(FFX_ALL)
+#include "blob_accessors/ffx_frameinterpolation_shaderblobs.h"
+#endif  // #if defined(FFX_FI) || defined(FFX_ALL)
+
 #if defined(FFX_NSS) || defined(FFX_ALL)
 #include "blob_accessors/ffx_nss_shaderblobs.h"
 #endif  // #if defined(FFX_NSS) || defined(FFX_ALL)
+
+#if defined(FFX_OF) || defined(FFX_ALL)
+#include "blob_accessors/ffx_opticalflow_shaderblobs.h"
+#endif  // #if defined(FFX_OF) || defined(FFX_ALL)
 
 #include <string.h>  // for memset
 
 FfxErrorCode ffxGetPermutationBlobByIndex(
     FfxEffect effectId, FfxPass passId, uint32_t permutationOptions, FfxShaderBlob* outBlob, FfxShaderBlob* outVertBlob, FfxDataGraphBlob* outDataGraphBlob)
 {
+    (void)passId;
+    (void)permutationOptions;
+
     switch (effectId)
     {
+#if defined(FFX_FI) || defined(FFX_ALL)
+    case ARM_EFFECT_FRAMEINTERPOLATION:
+        return frameInterpolationGetPermutationBlobByIndex((FfxFrameInterpolationPass)passId, permutationOptions, outBlob, outVertBlob, outDataGraphBlob);
+#endif  // #if defined(FFX_FI) || defined(FFX_ALL)
+
 #if defined(FFX_NSS) || defined(FFX_ALL)
     case FFX_EFFECT_NSS:
-        return nssGetPermutationBlobByIndex((FfxNssPass)passId, permutationOptions, outBlob, outDataGraphBlob);
+        return nssGetPermutationBlobByIndex((FfxNssPass)passId, permutationOptions, outBlob, outVertBlob, outDataGraphBlob);
 #endif  // #if defined(FFX_NSS) || defined(FFX_ALL)
+
+#if defined(FFX_OF) || defined(FFX_ALL)
+    case ARM_EFFECT_OPTICALFLOW:
+        return opticalflowGetPermutationBlobByIndex((FfxOpticalflowPass)passId, permutationOptions, outBlob, outVertBlob);
+#endif  // #if defined(FFX_OF) || defined(FFX_ALL)
 
     default:
         FFX_ASSERT_MESSAGE(false, "Not implemented");
@@ -53,10 +74,21 @@ FfxErrorCode ffxIsWave64(FfxEffect effectId, uint32_t permutationOptions, bool& 
 {
     switch (effectId)
     {
+//TODO: Enable when Wave64 support?
+#if defined(FFX_FI) || defined(FFX_ALL)
+    case ARM_EFFECT_FRAMEINTERPOLATION:
+        return FFX_OK;
+#endif  // #if defined(FFX_FI) || defined(FFX_ALL)
+
 #if defined(FFX_NSS) || defined(FFX_ALL)
     case FFX_EFFECT_NSS:
         return FFX_OK;
 #endif  // #if defined(FFX_NSS) || defined(FFX_ALL)
+
+#if defined(FFX_OF) || defined(FFX_ALL)
+    case ARM_EFFECT_OPTICALFLOW:
+        return opticalflowIsWave64(permutationOptions, isWave64);
+#endif  // #if defined(FFX_OF) || defined(FFX_ALL)
 
     default:
         FFX_ASSERT_MESSAGE(false, "Not implemented");

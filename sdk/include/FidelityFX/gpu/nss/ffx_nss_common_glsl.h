@@ -1,12 +1,299 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
  * SPDX-License-Identifier: MIT
  */
 
 #if !defined(FFX_NSS_COMMON_GLSL_H)
 #define FFX_NSS_COMMON_GLSL_H
 
+#include "ffx_nss_resources.h"
+
 #if defined(FFX_GPU)
+
+#include "ffx_core.h"
+
+#if QUANTIZED
+#define tensor_t    int8_t
+#define tensorVec_t int8_t4
+#else
+#define tensor_t    float
+#define tensorVec_t float4
+#endif
+
+#if REVERSE_Z
+#define INVERTED_DEPTH 1
+#endif
+
+// Default quality mode to BALANCE (1) if not set by the shader permutation.
+#ifndef NSS_SHADER_QUALITY_MODE
+#define NSS_SHADER_QUALITY_MODE 1
+#endif
+
+#define NSS_SCALE_PRESET_NONE 0
+#define NSS_SCALE_PRESET_X2   1
+
+#ifndef SCALE_PRESET_MODE
+#define SCALE_PRESET_MODE NSS_SCALE_PRESET_NONE
+#endif
+
+// Scale preset permutation is intentionally limited to exact 2x and general.
+// The postprocess shader derives the concrete filter implementation from the
+// scale preset and quality mode:
+//   NSS_FILTER_MODE = 0: static 2x dense
+//   NSS_FILTER_MODE = 1: static 2x sparse
+//   NSS_FILTER_MODE = 2: dynamic dense LUT
+//   NSS_FILTER_MODE = 3: dynamic sparse LUT
+#if SCALE_PRESET_MODE == NSS_SCALE_PRESET_X2
+#if NSS_SHADER_QUALITY_MODE == 0
+#define NSS_FILTER_MODE 0
+#else
+#define NSS_FILTER_MODE 1
+#endif
+#else
+#if NSS_SHADER_QUALITY_MODE == 0
+#define NSS_FILTER_MODE 2
+#else
+#define NSS_FILTER_MODE 3
+#endif
+#endif
+
+// Derive individual feature flags from the quality mode.
+//   QUALITY (0):      full-res depth scatter, full-res preprocess, no sparse filter, catmull history.
+//   BALANCE (1):      quarter-res depth scatter, half-res preprocess, packed offsets, sparse filter, catmull history.
+//   PERFORMANCE (2):  quarter-res depth scatter, half-res preprocess, packed offsets, sparse filter, no catmull.
+// BALANCE and PERFORMANCE are identical except NSS_USE_HISTORY_CATMULL (1 vs 0).
+#if NSS_SHADER_QUALITY_MODE == 0  // QUALITY(high)
+#define NSS_DEPTH_SCATTER_QUARTER_RES_INPUT 0
+#define NSS_PREPROCESS_HALF_RES_INPUT       0
+#define NSS_V1_HIGH_LUMA_DERIVATIVE         1
+#define NSS_V1_MID_LOW_LUMA_DERIVATIVE      0
+#define NSS_PACKED_NEAREST_OFFSET_QUAD      0
+#define NSS_USE_SPARSE_2X2_FILTER           0
+#define NSS_USE_HISTORY_CATMULL             1
+#elif NSS_SHADER_QUALITY_MODE == 1  // BALANCE(mid)
+#define NSS_DEPTH_SCATTER_QUARTER_RES_INPUT 1
+#define NSS_PREPROCESS_HALF_RES_INPUT       1
+#define NSS_V1_HIGH_LUMA_DERIVATIVE         0
+#define NSS_V1_MID_LOW_LUMA_DERIVATIVE      1
+#define NSS_PACKED_NEAREST_OFFSET_QUAD      1
+#define NSS_USE_SPARSE_2X2_FILTER           1
+#define NSS_USE_HISTORY_CATMULL             1
+#elif NSS_SHADER_QUALITY_MODE == 2  // PERFORMANCE(low)
+#define NSS_DEPTH_SCATTER_QUARTER_RES_INPUT 1
+#define NSS_PREPROCESS_HALF_RES_INPUT       1
+#define NSS_V1_HIGH_LUMA_DERIVATIVE         0
+#define NSS_V1_MID_LOW_LUMA_DERIVATIVE      1
+#define NSS_PACKED_NEAREST_OFFSET_QUAD      1
+#define NSS_USE_SPARSE_2X2_FILTER           1
+#define NSS_USE_HISTORY_CATMULL             0
+#else
+#error "Unknown shader quality mode!"
+#endif
+
+#define NSS_YCOCG_LUMA_DERIVATIVE (NSS_V1_HIGH_LUMA_DERIVATIVE || NSS_V1_MID_LOW_LUMA_DERIVATIVE)
+
+#ifdef INVERTED_DEPTH
+#define NSS_NEAREST_STEP(curr_depth, cand_depth) step(curr_depth, cand_depth)
+#define NSS_PLANE_DEPTH(prev_depth, curr_depth)  min(prev_depth, curr_depth)
+#else
+#define NSS_NEAREST_STEP(curr_depth, cand_depth) step(cand_depth, curr_depth)
+#define NSS_PLANE_DEPTH(prev_depth, curr_depth)  max(prev_depth, curr_depth)
+#endif
+
+///////////////////////////////////////////////
+// declare CBs and CB accessors
+///////////////////////////////////////////////
+#if defined(NSS_BIND_CB_NSS)
+layout(set = 0, binding = NSS_BIND_CB_NSS, std140) uniform cbNSS_t
+{
+    // ─────────────── 32bit precision objects ───────────────
+    float4 _DeviceToViewDepth;  //  16 B
+    float4 _JitterOffset;       //  16 B (.xy = pixels, .zw = uvs)
+    float4 _JitterOffsetTm1;    //  16 B (.xy = pixels, .zw = uvs)
+    float4 _ScaleFactor;        //  16 B (.xy = scale, .zw = inv scale)
+
+    int32_t2 _OutputDims;  //   8 B
+    int32_t2 _InputDims;   //   8 B
+
+    float2 _InvOutputDims;  //   8 B
+    float2 _InvInputDims;   //   8 B
+
+    int32_t2 _DepthTm1Size;     //   8 B
+    float2   _InvDepthTm1Size;  //   8 B
+
+    int32_t2 _InputTensorSize;     //   8 B
+    float2   _InputTensorSizeRcp;  //   8 B
+
+    int32_t2 _KpnDimension;       //   8 B
+    float2   _MotionVectorScale;  //   8 B
+
+    float2 _PaddingScale;               //   8 B  (input / padded_preprocess)
+    float  _DepthClipRequiredSepScale;  //   4 B
+    float  _DepthClipPower;             //   4 B
+
+    float2  _KpnScale;         //   8 B  (kpnDims / paddedDims)
+    int32_t _DebugViewMode;    //   4 B  debug view mode: 0=all tiles, 1-16=single tile fullscreen
+    float   _NotHistoryReset;  //   4 B
+
+    float2   _Exposure;     // 8 B  .x = exposure, .y = 1/exp
+    int32_t2 _IndexModulo;  // 8 B  reduced output numerator, xy order
+
+    int32_t2 _ReducedInputModulo;  // 8 B reduced input denominator, xy order
+    int32_t2 _LutOffset;           // 8 B jitter tile offset, xy order
+}
+cbNSS;
+
+//--------------------------------------------------------------
+// cbNSS accessor helpers.
+//--------------------------------------------------------------
+// Camera / projection
+float4 DeviceToViewDepth()
+{
+    return cbNSS._DeviceToViewDepth;
+}
+
+float4 JitterOffset()
+{
+    return cbNSS._JitterOffset;
+}
+
+float4 JitterOffsetTm1()
+{
+    return cbNSS._JitterOffsetTm1;
+}
+
+// Temporal / exposure
+half2 Exposure()
+{
+    return half2(cbNSS._Exposure);
+}
+
+half NotHistoryReset()
+{
+    return half(cbNSS._NotHistoryReset);
+}
+
+float2 MotionVectorScale()
+{
+    return cbNSS._MotionVectorScale;
+}
+
+// Debug view
+int32_t DebugViewMode()
+{
+    return cbNSS._DebugViewMode;
+}
+
+int32_t2 ReducedInputModulo()
+{
+    return cbNSS._ReducedInputModulo;
+}
+
+// KPN / postprocess (prototype names that alias input dims)
+int32_t2 IndexModulo()
+{
+    return cbNSS._IndexModulo;
+}
+
+int32_t2 LutOffset()
+{
+    return cbNSS._LutOffset;
+}
+
+int32_t2 KpnDims()
+{
+    return cbNSS._KpnDimension;
+}
+
+float2 KpnScale()
+{
+    return cbNSS._KpnScale;
+}
+
+#endif  // #if defined(NSS_BIND_CB_NSS)
+
+//--------------------------------------------------------------
+// GPU-side debug view mode constants (matches NssDebugViewMode in ffx_nss_private.h)
+// 4x4 tile grid; only NSS_DEBUG_VIEW_MODE_ALL is referenced by the shader, the rest
+// document the single-tile fullscreen mode -> tile mapping.
+//--------------------------------------------------------------
+#define NSS_DEBUG_VIEW_MODE_ALL                      (0)   // 4x4 overview
+#define NSS_DEBUG_VIEW_MODE_HISTORY                  (1)   // row0,col0 history_color
+#define NSS_DEBUG_VIEW_MODE_DEPTH                    (2)   // row0,col1 input_depth
+#define NSS_DEBUG_VIEW_MODE_RECONSTRUCTED_PREV_DEPTH (3)   // row0,col2 prev_depth
+#define NSS_DEBUG_VIEW_MODE_NEAREST_OFFSET           (4)   // row0,col3 nearest_offset
+#define NSS_DEBUG_VIEW_MODE_LOW_RES_COLOR            (5)   // row1,col0 low_res_color (texture)
+#define NSS_DEBUG_VIEW_MODE_MOTION_VECTOR            (6)   // row1,col1 motion_vector (texture)
+#define NSS_DEBUG_VIEW_MODE_LUMA_DERIV_TM1           (7)   // row1,col2 luma_deriv_tm1
+#define NSS_DEBUG_VIEW_MODE_TEMPORAL_FEEDBACK        (8)   // row1,col3 temporal_feedback (texture)
+#define NSS_DEBUG_VIEW_MODE_LR_WARPED_HISTORY        (9)   // row2,col0 lr_warped_history (tensor)
+#define NSS_DEBUG_VIEW_MODE_DISOCCLUSION_MASK        (10)  // row2,col1 disocclusion_mask
+#define NSS_DEBUG_VIEW_MODE_LUMA_DERIV_T             (11)  // row2,col2 luma_deriv_t (current-frame SRV)
+#define NSS_DEBUG_VIEW_MODE_DEPTH_DILATED            (12)  // row2,col3 depth_dilated
+#define NSS_DEBUG_VIEW_MODE_TENSOR_COLOR             (13)  // row3,col0 unjittered_color (tensor)
+#define NSS_DEBUG_VIEW_MODE_TENSOR_MOTION_DETECTOR   (14)  // row3,col1 motion_detector (tensor)
+#define NSS_DEBUG_VIEW_MODE_TENSOR_LUMA_INSTABILITY  (15)  // row3,col2 luma_instability (tensor)
+#define NSS_DEBUG_VIEW_MODE_TENSOR_WARP_FEEDBACK     (16)  // row3,col3 warp_feedback (tensor)
+
+layout(set = 0, binding = 1000) uniform sampler s_PointClamp;
+layout(set = 0, binding = 1001) uniform sampler s_LinearClamp;
+
+//=========================================================================
+// Common Resources for all passes
+//=========================================================================
+
+//-------------------------------------------------------------------------
+// Input: color-jittered
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_INPUT_COLOR_JITTERED)
+layout(set = 0, binding = NSS_BIND_SRV_INPUT_COLOR_JITTERED) uniform mediump texture2D r_input_color_jittered;
+#define _ColourTex sampler2D(r_input_color_jittered, s_LinearClamp)
+#endif
+
+//-------------------------------------------------------------------------
+// Input: motion-vectors
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_INPUT_MOTION_VECTORS)
+layout(set = 0, binding = NSS_BIND_SRV_INPUT_MOTION_VECTORS) uniform mediump texture2D r_input_motion_vectors;
+#define _MotionTex sampler2D(r_input_motion_vectors, s_LinearClamp)
+#endif
+
+//-------------------------------------------------------------------------
+// Input: Prev-upscaled-color
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_HISTORY_UPSCALED_COLOR)
+layout(set = 0, binding = NSS_BIND_SRV_HISTORY_UPSCALED_COLOR) uniform mediump texture2D r_prev_upscaled_color;
+#define _HistoryTex sampler2D(r_prev_upscaled_color, s_LinearClamp)
+#endif
+
+//-------------------------------------------------------------------------
+// Input: Input-depth (used by depth-scatter and preprocess passes)
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_INPUT_DEPTH)
+layout(set = 0, binding = NSS_BIND_SRV_INPUT_DEPTH) uniform highp texture2D r_input_depth;
+#define _DepthTex sampler2D(r_input_depth, s_PointClamp)
+
+float2 GatherQuadUvFromTL(int32_t2 base, float2 inv_size)
+{
+    // Bias inside the intended 2x2 footprint so gather does not sit exactly on
+    // a texel-center tie. GLSL gather is swizzled below into TL, TR, BL, BR.
+    return (float2(base) + float2(0.75)) * inv_size;
+}
+
+float4 GatherDepthQuadTLBR(int32_t2 base, float2 inv_size)
+{
+    return textureGather(_DepthTex, GatherQuadUvFromTL(base, inv_size), 0).wzxy;
+}
+
+#endif
+
+//-------------------------------------------------------------------------
+// Output: Reconstructed prev-depth (depth scatter write target) — R32_UINT
+//         Shared by depth-scatter (write) and preprocess (read via SRV alias)
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_UAV_DEPTH_TM1)
+layout(set = 0, binding = NSS_BIND_UAV_DEPTH_TM1, r32ui) coherent uniform uimage2D rw_reconstructed_prev_depth;
+#endif
 
 #define FLT_MIN            1.175494351e-38
 #define MEDIUMP_FLT_MAX    65504.f
@@ -159,10 +446,9 @@ vec3 YCoCgToRGB(vec3 YCoCg)
     return Rgb;
 }
 
-FfxFloat32 GetViewSpaceDepth(FfxFloat32 fDeviceDepth, FfxFloat32x4 fDeviceToViewDepth)
+float GetViewSpaceDepth(float fDeviceDepth)
 {
-    // fDeviceToViewDepth details found in ffx_nss.cpp
-    return (fDeviceToViewDepth[1] / (fDeviceDepth - fDeviceToViewDepth[0]));
+    return (cbNSS._DeviceToViewDepth[1] / (fDeviceDepth - cbNSS._DeviceToViewDepth[0]));
 }
 
 #define lerp mix
@@ -241,8 +527,9 @@ float4 saturate(float4 x)
     return clamp(x, float4(0.f), float4(1.f));
 }
 
-#define MAX_FP16 65504.HF
-#define EPS      1e-7HF
+#define MAX_FP16      65504.HF
+#define EPS           1e-7HF
+#define MIN_SUMW_HALF 6.1035156e-5HF
 
 #define TONEMAP_KARIS
 // #define TONEMAP_REINHARD
@@ -252,8 +539,14 @@ half3 Tonemap(half3 x)
 {
     // Karis tonemapper
     // http://graphicrants.blogspot.com/2013/12/tone-mapping.html
-    x = clamp(x, half3(0.HF), half3(MAX_FP16));
-    return x * rcp(half3(1.HF) + max(max(x.r, x.g), x.b));
+
+    // Clamp internal working value, do not mutate input
+    half3 xc = clamp(x, half3(0.HF), half3(MAX_FP16));
+
+    // Compute max channel in FP32 to avoid FP16 Flush‑To‑Zero
+    float m = max(max(float(xc.r), float(xc.g)), float(xc.b));
+
+    return half3(float3(xc) * (1.0f / (1.0f + m)));
 }
 
 half3 InverseTonemap(half3 x)
@@ -397,80 +690,76 @@ half3 SafeColour(half3 x)
 
 uint8_t EncodeNearestDepthCoord(int32_t2 o)
 {
-    // o ∈ {-1, 0, 1}²
-    o = clamp(o, ivec2(-1), ivec2(1));
-    return uint8_t((o.y + 1) << 2 | (o.x + 1));  // 0-15
+    // o ∈ {-2, -1, 0, 1, 2}² — 5×5 = 25 values, fits in 6 bits (≤ 63 < 255).
+    // Matches EncodeNearestDepthCoordUNorm in ffx_nss_preprocess.h.
+    o = clamp(o, ivec2(-2), ivec2(2));
+    return uint8_t(((o.y + 2) << 3) | (o.x + 2));  // values 0-24
 }
 
 int32_t2 DecodeNearestDepthCoord(int32_t code)
 {
-    int32_t x = int32_t(code & 0x3) - 1;         // bits 0-1
-    int32_t y = int32_t((code >> 2) & 0x3) - 1;  // bits 2-3
+    int32_t x = int32_t(code & 0x7) - 2;         // bits 0-2
+    int32_t y = int32_t((code >> 3) & 0x7) - 2;  // bits 3-5
     return int32_t2(x, y);
 }
 
-struct KernelTile
+struct BilinearSamplingData
 {
-    int16_t4 dx;
-    int16_t4 dy;
+    int32_t2 iOffsets[4];
+    float    fWeights[4];
+    int32_t2 iBasePos;
 };
 
-// Define actual scale value based on mode
-#if SCALE_MODE == 0
-//No LUT method.
+BilinearSamplingData GetBilinearSamplingData(float2 fUv, int32_t2 iSize)
+{
+    BilinearSamplingData data;
+    float2               fPxSample = (fUv * float2(iSize)) - float2(0.5f, 0.5f);
+    data.iBasePos                  = int32_t2(floor(fPxSample));
+    float2 fPxFrac                 = fract(fPxSample);
 
-#elif SCALE_MODE == SCALE_1_3X
-// x1.3 not supported yet
+    data.iOffsets[0] = int32_t2(0, 0);
+    data.iOffsets[1] = int32_t2(1, 0);
+    data.iOffsets[2] = int32_t2(0, 1);
+    data.iOffsets[3] = int32_t2(1, 1);
 
-#elif SCALE_MODE == SCALE_1_5X
-// x1.5 not supported yet
+    data.fWeights[0] = (1.f - fPxFrac.x) * (1.f - fPxFrac.y);
+    data.fWeights[1] = (fPxFrac.x) * (1.f - fPxFrac.y);
+    data.fWeights[2] = (1.f - fPxFrac.x) * (fPxFrac.y);
+    data.fWeights[3] = (fPxFrac.x) * (fPxFrac.y);
 
-#elif SCALE_MODE == SCALE_2_0X
-
-#define CENTER_TAP   0
-#define NUM_PATTERNS 4
-
-const KernelTile kernelLUT[NUM_PATTERNS] = {{// Pattern 0:
-                                             // Taps:  0,  2,  8, 10
-                                             // Grid:
-                                             //   [●  ·  ●  ·]
-                                             //   [·  ·  ·  ·]
-                                             //   [●  ·  ●  ·]
-                                             //   [·  ·  ·  ·]
-                                             int16_t4(-1, +1, -1, +1),
-                                             int16_t4(-1, -1, +1, +1)},
-                                            {// Pattern 1:
-                                             // Taps:  1,  3,  9, 11
-                                             // Grid:
-                                             //   [·  ●  ·  ●]
-                                             //   [·  ·  ·  ·]
-                                             //   [·  ●  ·  ●]
-                                             //   [·  ·  ·  ·]
-                                             int16_t4(0, +2, 0, +2),
-                                             int16_t4(-1, -1, +1, +1)},
-                                            {// Pattern 2:
-                                             // Taps:  4,  6, 12, 14
-                                             // Grid:
-                                             //   [·  ·  ·  ·]
-                                             //   [●  ·  ●  ·]
-                                             //   [·  ·  ·  ·]
-                                             //   [●  ·  ●  ·]
-                                             int16_t4(-1, +1, -1, +1),
-                                             int16_t4(0, 0, +2, +2)},
-                                            {// Pattern 3:
-                                             // Taps:  5,  7, 13, 15
-                                             // Grid:
-                                             //   [·  ·  ·  ·]
-                                             //   [·  ●  ·  ●]
-                                             //   [·  ·  ·  ·]
-                                             //   [·  ●  ·  ●]
-                                             int16_t4(0, +2, 0, +2),  // center-aligned
-                                             int16_t4(0, 0, +2, +2)}};
-
-#else
-#error "Unsupported SCALE_MODE"
-#endif
+    return data;
+}
 
 #endif  // #if defined(FFX_GPU)
 
-#endif  //!defined(FFX_NSS_COMMON_HLSL_H)
+//--------------------------------------------------------------
+// Output: debug views UAV (compute path)
+//--------------------------------------------------------------
+#if defined(NSS_BIND_UAV_DEBUG_VIEWS)
+layout(set = 0, binding = NSS_BIND_UAV_DEBUG_VIEWS, r11f_g11f_b10f) uniform mediump image2D rw_debug_views;
+void StoreDebugView(int32_t2 iPxPos, float4 v)
+{
+    imageStore(rw_debug_views, iPxPos, v);
+}
+int32_t2 GetDebugViewDimensions()
+{
+    return cbNSS._OutputDims;
+}
+#endif  // #if defined(NSS_BIND_UAV_DEBUG_VIEWS)
+
+//--------------------------------------------------------------
+// Output: debug views render target (fragment path)
+//--------------------------------------------------------------
+#if defined(NSS_BIND_RENDER_TARGET_DEBUG_VIEWS)
+layout(location = NSS_BIND_RENDER_TARGET_DEBUG_VIEWS) out mediump vec4 rw_debug_views;
+void StoreDebugView(int32_t2 iPxPos, float4 v)
+{
+    rw_debug_views = v;
+}
+int32_t2 GetDebugViewDimensions()
+{
+    return cbNSS._OutputDims;
+}
+#endif  // #if defined(NSS_BIND_RENDER_TARGET_DEBUG_VIEWS)
+
+#endif  //!defined(FFX_NSS_COMMON_GLSL_H)

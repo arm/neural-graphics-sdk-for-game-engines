@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include <FidelityFX/host/ffx_types.h>
+#include "ffx_types.h"
 
 /// @defgroup Errors Error Codes
 /// Error codes returned from FidelityFX SDK functions

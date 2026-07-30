@@ -25,6 +25,12 @@
 ///
 /// @ingroup FfxGLSL
 
+// Explicitly declare default precision qualifiers to silence compiler warnings
+// ("all default precisions are highp"). These match the compiler defaults and
+// do not affect explicit half types (float16_t, f16vec2, etc.) from FFX_HALF.
+precision highp float;
+precision highp int;
+
 /// A define for abstracting select functionality for pre/post HLSL 21
 ///
 /// @ingroup GLSLCore

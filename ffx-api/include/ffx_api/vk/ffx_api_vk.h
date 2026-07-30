@@ -19,11 +19,15 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+//
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: MIT
 
 #pragma once
 #include "../ffx_api.h"
 #include "../ffx_api_types.h"
 #include <vulkan/vulkan.h>
+#include "../../../../sdk/include/FidelityFX/host/backends/vk/ffx_vk.h"
 
 /// FFX specific callback type when submitting a command buffer to a queue.
 typedef VkResult (*PFN_vkQueueSubmitFFXAPI)(uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence);

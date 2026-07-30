@@ -70,17 +70,18 @@ if (NOT FFX_FSR3_AS_LIBRARY)
 	endif()
 
 	# Write both debug and release versions of the static libs to the /bin folder as they are uniquely named
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
+	# Use platform-specific directory to avoid conflicts between different architectures
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
 
 	if (FFX_BUILD_AS_DLL)
 		# Write both debug and release versions of the dlls to the /bin folder as they are uniquely named
-		set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
-		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/)
+		set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
+		set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_HOME_DIRECTORY}/bin/ffx_sdk/${FFX_PLATFORM_NAME}/)
 		set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS FFX_BUILD_AS_DLL)
 	endif()
 endif()
@@ -95,14 +96,14 @@ if(FFX_VS_VERSION STREQUAL 2015 OR FFX_VS_VERSION STREQUAL 2017)
 endif()
 
 # Setup common variables
-if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+if(CMAKE_HOST_WIN32)
 	set(FFX_SC_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/FidelityFX_SC.exe)
-	# we need to use the glslangValidator that supports the VulkanML
+	# we need to use the glslangValidator that supports ML extensions for Vulkan
 	set(FFX_GLSLANG_EXE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/glslangValidator.exe)
 	set(VGF_PARSER_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/Model_Parser.exe)
 else()
 	set(FFX_SC_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/FidelityFX_SC)
-	# we need to use the glslangValidator that supports the VulkanML
+	# we need to use the glslangValidator that supports ML extensions for Vulkan
 	set(FFX_GLSLANG_EXE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/glslangValidator)
 	set(VGF_PARSER_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/Model_Parser)
 endif()
@@ -150,21 +151,51 @@ if(NOT FFX_FSR3_AS_LIBRARY)
 endif()
 
 # Components
+#add_subdirectory(${FFX_COMPONENTS_PATH}/opticalflow)
+
 if(FFX_NSS OR FFX_ALL)
+	message(STATUS "Component FFX_NSS=ON")
 	add_subdirectory(${FFX_COMPONENTS_PATH}/nss)
+endif()
+
+if(FFX_FI OR FFX_ALL)
+	message(STATUS "Component FFX_FI=ON")
+	add_subdirectory(${FFX_COMPONENTS_PATH}/frameinterpolation)
+endif()
+
+if (FFX_OF OR FFX_ALL)
+	message(STATUS "Component FFX_OF=ON")
+	add_subdirectory(${FFX_COMPONENTS_PATH}/opticalflow)
 endif()
 
 # Add appropriate graphics backend if requested
 if (FFX_GRAPHICS_API STREQUAL "vk")
 	# Configure SPIRV-Tools to build as static libraries
-	# arm_ng_sdk uses a custom fork of SPIRV-Tools with graph extensions
+	# Neural Graphics SDK for Game Engines uses a custom fork of SPIRV-Tools with graph extensions
+	set(SPIRV_TOOLS_BUILD_STATIC ON CACHE BOOL "" FORCE)
 	set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
 	set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
 	set(SPIRV_WERROR OFF CACHE BOOL "" FORCE)
 	# Set SPIRV-Headers location - must be non-cache variable so it propagates to subdirectory
 	set(SPIRV-Headers_SOURCE_DIR "${FFX_LIB_PATH}/SPIRV-Headers")
+	# Hide SPIRV-Tools symbols to prevent conflicts with applications that also use SPIRV-Tools
+	# Save current visibility settings
+	set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+	set(SAVED_CXX_VISIBILITY_PRESET ${CMAKE_CXX_VISIBILITY_PRESET})
+	set(SAVED_VISIBILITY_INLINES_HIDDEN ${CMAKE_VISIBILITY_INLINES_HIDDEN})
+	# Set hidden visibility for SPIRV-Tools to avoid symbol conflicts
+	set(BUILD_SHARED_LIBS OFF)
+	set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+	set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 	# Add SPIRV-Tools subdirectory
 	add_subdirectory(${FFX_LIB_PATH}/SPIRV-Tools)
+	if(TARGET SPIRV-Tools-shared)
+		set_target_properties(SPIRV-Tools-shared PROPERTIES EXCLUDE_FROM_ALL TRUE)
+	endif()
+	# Restore previous visibility settings for SDK build
+	set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
+	set(CMAKE_CXX_VISIBILITY_PRESET ${SAVED_CXX_VISIBILITY_PRESET})
+	set(CMAKE_VISIBILITY_INLINES_HIDDEN ${SAVED_VISIBILITY_INLINES_HIDDEN})
 	add_subdirectory(${FFX_SRC_BACKENDS_PATH}/vk)
 endif()
 

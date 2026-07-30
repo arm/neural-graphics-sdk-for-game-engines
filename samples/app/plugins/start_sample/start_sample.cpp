@@ -18,6 +18,10 @@
 
 #include "start_sample.h"
 
+#include <map>
+#include <vector>
+#include <string>
+
 #include "apps.h"
 
 namespace plugins
@@ -42,6 +46,26 @@ void StartSample::launch_sample(apps::SampleInfo const *sample) const
 
 void StartSample::list_samples(bool one_per_line) const
 {
+	// Per-sample --app-arg documentation
+	static const std::map<std::string, std::vector<std::string>> app_arg_docs = {
+	    {"nss", {
+	        "NSS_ENABLE=0|1          Enable/disable NSS upscaling (default: 1)",
+	        "NSS_SCALE_FACTOR=float  Upscale factor [1.0, 3.0] (default: 2.0)",
+	        "NSS_FLAGS=0xHEX         Context creation flags override (default: 0)",
+	        "NSS_QUALITY=0|1|2       NSS quality mode: 0=Quality, 1=Balanced, 2=Performance (default: 1)",
+	        "NSS_USE_FRAGMENT=0|1    Execution path: 0=compute, 1=fragment (default: 1)",
+			"NSS_DEBUG_VIEW_MODE=0..16  Debug view mode: 0=overview, 1..16=single tile (default: 0)",
+	    }},
+	    {"nfru", {
+	        "NFRU_DATASET_DIR=path   Path to EXR dataset directory (enables dataset mode)",
+	        "NFRU_DATASET_SEQUENCE=N Dataset sequence ID (default: 0000)",
+	        "NFRU_SAVE_EXR=0|1       Save generated frames to EXR files (default: 0)",
+	        "NFRU_ORBIT_SPEED=float  Camera rotation speed in degrees/frame (default: 0.5)",
+	        "NFRU_USE_FRAGMENT=0|1   Execution path: 0=compute, 1=fragment (default: 0)",
+	        "NFRU_DEBUG_VIEW=0|1     Enable NFRU debug view at startup (default: 0)",
+	    }},
+	};
+
 	auto samples = apps::get_samples();
 
 	LOGI("");
@@ -60,6 +84,13 @@ void StartSample::list_samples(bool one_per_line) const
 			LOGI("{}", sample->name.c_str());
 			LOGI("\tid: {}", sample->id.c_str());
 			LOGI("\tdescription: {}", sample->description.c_str());
+			auto it = app_arg_docs.find(sample->id);
+			if (it != app_arg_docs.end())
+			{
+				LOGI("\tapp args (--app-arg KEY=VALUE):");
+				for (const auto &arg : it->second)
+					LOGI("\t\t{}", arg.c_str());
+			}
 			LOGI("");
 		}
 	}

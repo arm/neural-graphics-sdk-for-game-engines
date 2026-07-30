@@ -93,7 +93,7 @@ struct ffxDispatchDescUpscale
     struct FfxApiFloatCoords2D jitterOffset;                ///< The subpixel jitter offset applied to the camera.
     struct FfxApiFloatCoords2D motionVectorScale;           ///< The scale factor to apply to motion vectors.
     struct FfxApiDimensions2D  renderSize;                  ///< The resolution that was used for rendering the input resources.
-    struct FfxApiDimensions2D  upscaleSize;                 ///< The resolution that the upscaler will upscale to (optional, assumed maxUpscaleSize otherwise).
+    struct FfxApiDimensions2D  upscaleSize;                 ///< The resolution that the upscaler will upscale to.
     bool                       enableSharpening;            ///< Enable an additional sharpening pass.
     float                      sharpness;  ///< The sharpness value between 0 and 1, where 0 is no additional sharpness and 1 is maximum additional sharpness.
     float                      frameTimeDelta;           ///< The time elapsed since the last frame (expressed in milliseconds).

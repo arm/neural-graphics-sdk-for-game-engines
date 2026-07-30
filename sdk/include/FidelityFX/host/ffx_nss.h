@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #pragma once
@@ -81,13 +81,14 @@ extern "C" {
 /// @ingroup ffxNss
 typedef enum FfxNssPass
 {
-
-    FFX_NSS_PASS_MIRROR_PADDING = 0,  ///< A pass which performs mirror padding.
-    FFX_NSS_PASS_PREPROCESS     = 1,  ///< A pass which performs preprocessing.
-    FFX_NSS_PASS_DATA_GRAPH     = 2,  ///< A pass which performs data graph.
-    FFX_NSS_PASS_POSTPROCESS    = 3,  ///< A pass which performs postprocessing.
-    FFX_NSS_PASS_DEBUG_VIEW     = 4,  ///< A pass which overlays debug views.
-    FFX_NSS_PASS_COUNT                ///< The number of passes performed by NSS.
+    FFX_NSS_PASS_DEPTH_SCATTER       = 0,  ///< A pass which performs depth scattering.
+    FFX_NSS_PASS_DISOCCLUSION_MASK   = 1,  ///< A pass which computes low-quality disocclusion mask.
+    FFX_NSS_PASS_PREPROCESS          = 2,  ///< A pass which performs preprocessing.
+    FFX_NSS_PASS_DATA_GRAPH          = 3,  ///< A pass which performs data graph.
+    FFX_NSS_PASS_GENERATE_OFFSET_LUT = 4,  ///< A pass which builds the dynamic postprocess offset LUT.
+    FFX_NSS_PASS_POSTPROCESS         = 5,  ///< A pass which performs postprocessing.
+    FFX_NSS_PASS_DEBUG_VIEW          = 6,  ///< A pass which overlays debug views.
+    FFX_NSS_PASS_COUNT                     ///< The number of passes performed by NSS.
 } FfxNssPass;
 
 /// An enumeration of all the quality modes supported by NSS.
@@ -111,10 +112,9 @@ typedef enum FfxNssPass
 /// @ingroup ffxNss
 typedef enum FfxNssShaderQualityMode
 {
-
-    FFX_NSS_SHADER_QUALITY_MODE_QUALITY     = 1,  ///< Perform upscaling with a shader quality mode of 'Quality'
-    FFX_NSS_SHADER_QUALITY_MODE_BALANCED    = 2,  ///< Perform upscaling with a shader quality mode of 'Balanced'
-    FFX_NSS_SHADER_QUALITY_MODE_PERFORMANCE = 3,  ///< Perform upscaling with a shader quality mode of 'Performance'
+    FFX_NSS_SHADER_QUALITY_MODE_QUALITY     = 0,  ///< Perform upscaling with a shader quality mode of 'Quality'
+    FFX_NSS_SHADER_QUALITY_MODE_BALANCED    = 1,  ///< Perform upscaling with a shader quality mode of 'Balance'
+    FFX_NSS_SHADER_QUALITY_MODE_PERFORMANCE = 2,  ///< Perform upscaling with a shader quality mode of 'Performance'
 } FfxNssShaderQualityMode;
 
 /// An enumeration of bit flags used when creating a
@@ -123,14 +123,17 @@ typedef enum FfxNssShaderQualityMode
 /// @ingroup ffxNss
 typedef enum FfxNssInitializationFlagBits
 {
-    FFX_NSS_CONTEXT_FLAG_QUANTIZED              = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
-    FFX_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE     = (1 << 1),  ///< A bit indicating if the input color data provided is using a high-dynamic range.
-    FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED         = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
-    FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE         = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
-    FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC       = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
-    FFX_NSS_CONTEXT_FLAG_READ_TENSORS_AS_IMAGES = (1 << 5),  ///< A bit indicating tensor image aliasing is enable.
-    FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT            = (1 << 6),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
-    FFX_NSS_CONTEXT_FLAG_ENABLE_DEBUG_CHECKING  = (1 << 7),  ///< A bit indicating that the runtime should check some API values and report issues.
+    FFX_NSS_CONTEXT_FLAG_QUANTIZED          = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
+    FFX_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE = (1 << 1),  ///< A bit indicating if the input color data provided is using a high-dynamic range.
+    FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED     = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
+    FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE     = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
+    FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC   = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
+    FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT        = (1 << 5),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
+    FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY =
+        (1
+         << 6),  ///< A bit indicating that the SDK manages the previous history textures internally. When not set the user must supply outputTm1 each dispatch.
+    FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT  = (1 << 7),  ///< A bit indicating that the pre-process shader should run as a fragment job when supported.
+    FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT = (1 << 8),  ///< A bit indicating that the post-process shader should run as a fragment job when supported.
 } FfxNssInitializationFlagBits;
 
 /// Pass a string message
@@ -142,26 +145,30 @@ typedef enum FfxNssInitializationFlagBits
 ///
 ///
 /// @ingroup ffxNss
-typedef void (*FfxNssMessage)(FfxMsgType type, const wchar_t* message);
+typedef void (*FfxNssMessage)(FfxMsgType type, const char* message);
 
 /// A structure encapsulating the parameters required to initialize NSS.
 ///
 /// @ingroup ffxNss
 typedef struct FfxNssContextDescription
 {
-    FfxNssShaderQualityMode qualityMode;    ///< What shader quality mode to use
-    uint32_t                flags;          ///< A collection of <c><i>FfxNssInitializationFlagBits</i></c>.
-    FfxDimensions2D         maxRenderSize;  ///< The size that rendering will be performed at. This must match the size when dispatching.
-    FfxDimensions2D maxUpscaleSize;         ///< The size of the output resolution targeted by the upscaling process. This must match the size when dispatching.
-    FfxDimensions2D displaySize;            ///< The size of the presentation resolution targeted by the upscaling process.
+    FfxNssShaderQualityMode qualityMode;  ///< What shader quality mode to use
+    uint32_t                flags;        ///< A collection of <c><i>FfxNssInitializationFlagBits</i></c>.
+    FfxDimensions2D         renderSize;   ///< The size that rendering will be performed at. This must match the size when dispatching.
+    FfxDimensions2D         upscaleSize;  ///< The size of the output resolution targeted by the upscaling process. This must match the size when dispatching.
+    FfxDimensions2D         displaySize;  ///< The size of the presentation resolution targeted by the upscaling process.
 
     FfxInterface  backendInterface;  ///< A set of pointers to the backend implementation for FidelityFX SDK
     FfxNssMessage fpMessage;         ///< A pointer to a function that can receive messages from the runtime.
 } FfxNssContextDescription;
 
+/// @ingroup ffxNss
 typedef enum FfxNssDispatchFlags
 {
-    FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW = (1 << 0),  ///< A bit indicating that the output resource will contain debug views with relevant information.
+    FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING =
+        (1 << 0),  ///< A bit indicating that dispatch parameters should be validated and errors reported via the message callback.
+    FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW =
+        (1 << 1),  ///< A bit indicating that the debug view pass should run, writing intermediate resources into the debugViews resource.
 } FfxNssDispatchFlags;
 
 /// A structure encapsulating the parameters for dispatching the various passes
@@ -176,8 +183,8 @@ typedef struct FfxNssDispatchDescription
     FfxResource
                 motionVectors;  ///< A <c><i>FfxResource</i></c> containing 2-dimensional motion vectors (at render resolution if <c><i>FFX_NSS_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS</i></c> is not set).
     FfxResource output;         ///< A <c><i>FfxResource</i></c> containing the output color buffer for the current frame (at presentation resolution).
-    ///< Necessary because we will pollute the colour history if we render debug views directly in the output buffer.
-    ///< (We could also use an internally FFX managed colour history, but that would imply doing an extra blit every frame to copy the input colour into history!)
+    FfxResource
+        outputTm1;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame (at presentation resolution). Ignored when FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is set; required otherwise. The caller is responsible for ping-ponging: pass frame N's output as frame N+1's outputTm1.
 
     FfxFloatCoords2D jitterOffset;            ///< The subpixel jitter offset applied to the camera.
     FfxDimensions2D  upscaleSize;             ///< The resolution that was used for rendering the output resources.
@@ -191,7 +198,10 @@ typedef struct FfxNssDispatchDescription
 
     float    frameTimeDelta;  ///< The time elapsed since the last frame (expressed in milliseconds).
     bool     reset;           ///< A boolean value which when set to true, indicates the camera has moved discontinuously.
-    uint32_t flags;           ///< combination of FfxNssDispatchFlags
+    uint32_t flags;           ///< A combination of <c><i>FfxNssDispatchFlags</i></c>.
+    FfxResource
+             debugViews;  ///< Output resource for debug views. Required when FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW is set. Must be display-resolution (upscaleSize) R11G11B10 or equivalent.
+    uint32_t debugViewMode;  ///< Debug view display mode (see NssDebugViewMode). 0 = all tiles in 4×4 grid; 1–16 = single tile fullscreen.
 } FfxNssDispatchDescription;
 
 /// A structure encapsulating the parameters for automatic generation of a reactive mask
@@ -423,6 +433,25 @@ FFX_API int32_t ffxNssGetJitterPhaseCount(int32_t renderWidth, int32_t displayWi
 ///
 /// @ingroup ffxNss
 FFX_API FfxErrorCode ffxNssGetJitterOffset(float* pOutX, float* pOutY, int32_t index, int32_t phaseCount);
+
+/// Query whether the preprocess and postprocess stages are executing as
+/// fragment jobs or compute jobs for the given NSS context.
+///
+/// The answer is determined at context-creation time based on the requested
+/// flags and the device capabilities detected at that point. A caller may
+/// pass <c>NULL</c> for either output pointer if that value is not needed.
+///
+/// @param [in]  pContext                    A pointer to an initialised <c><i>FfxNssContext</i></c>.
+/// @param [out] pOutPreProcessUsesFragment  Receives <c>true</c> if pre-process runs as a fragment job. May be <c>NULL</c>.
+/// @param [out] pOutPostProcessUsesFragment Receives <c>true</c> if post-process runs as a fragment job. May be <c>NULL</c>.
+///
+/// @retval
+/// FFX_OK                              The operation completed successfully.
+/// @retval
+/// FFX_ERROR_INVALID_POINTER           <c><i>pContext</i></c> was <c>NULL</c>.
+///
+/// @ingroup ffxNss
+FFX_API FfxErrorCode ffxNssGetPipelineStageInfo(FfxNssContext* pContext, bool* pOutPreProcessUsesFragment, bool* pOutPostProcessUsesFragment);
 
 /// A helper function to check if a resource is
 /// <c><i>FFX_NSS_RESOURCE_IDENTIFIER_NULL</i></c>.

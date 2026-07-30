@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 
 #pragma once
@@ -32,7 +32,8 @@ extern "C" {
 #endif  // #if defined(__cplusplus)
 
 // Get a HLSL shader blob for the specified pass and permutation index.
-FfxErrorCode nssGetPermutationBlobByIndex(FfxNssPass passId, uint32_t permutationOptions, FfxShaderBlob* outShaderBlob, FfxDataGraphBlob* outDataGraphBlob);
+FfxErrorCode nssGetPermutationBlobByIndex(
+    FfxNssPass passId, uint32_t permutationOptions, FfxShaderBlob* outShaderBlob, FfxShaderBlob* outVertBlob, FfxDataGraphBlob* outDataGraphBlob);
 
 #if defined(__cplusplus)
 }

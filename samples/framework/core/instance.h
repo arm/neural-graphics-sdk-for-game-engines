@@ -359,7 +359,14 @@ inline Instance<bindingType>::Instance(std::string const                        
 
 	// VK_KHR_get_physical_device_properties2 is a prerequisite of VK_KHR_performance_query
 	// which will be used for stats gathering where available.
-	enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
+	// For Vulkan 1.1+, vkGetPhysicalDeviceFeatures2/Properties2 are core functions.
+	// Enabling the KHR extension on 1.1+ can cause the Vulkan loader to route
+	// physical device queries differently, bypassing emulation layers that only
+	// intercept the core entry points (e.g. VK_LAYER_ML_Graph_Emulation).
+	if (api_version < VK_MAKE_API_VERSION(0, 1, 1, 0))
+	{
+		enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
+	}
 
 	for (auto requested_extension : requested_extensions)
 	{

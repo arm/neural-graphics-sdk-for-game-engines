@@ -33,8 +33,8 @@ endforeach ()
 
 # Order of the sample ids
 set(ORDER_LIST
-    #Performance Samples
     "nss"
+    "nfru"
     )
 
 # Orders the sample ids by the order list above

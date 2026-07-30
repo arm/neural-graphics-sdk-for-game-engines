@@ -1,121 +1,338 @@
-// This file is part of the FidelityFX SDK.
-//
-// Copyright (C) 2024 Advanced Micro Devices, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files(the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions :
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-//
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef GPU_NSS_DEBUG_VIEW_H
 #define GPU_NSS_DEBUG_VIEW_H
-struct FfxDebugViewport
+
+#include "nss/ffx_nss_common_glsl.h"
+
+//--------------------------------------------------------------
+// SRV declarations for debug view resources
+//--------------------------------------------------------------
+
+#if !defined(NSS_BIND_SRV_INPUT_DEPTH) || !defined(NSS_BIND_SRV_INPUT_MOTION_VECTORS) || !defined(NSS_BIND_SRV_HISTORY_UPSCALED_COLOR) || \
+    !defined(NSS_BIND_SRV_INPUT_DEPTH_TM1) || !defined(NSS_BIND_SRV_LUMA_DERIV_TM1) || !defined(NSS_BIND_SRV_INPUT_COLOR_JITTERED)
+#error "Debug view requires input depth, motion vectors, history color, prev depth, prev luma deriv, and input colour SRVs to be bound."
+#endif
+
+#if !defined(NSS_BIND_PREPROCESS_INPUT_TENSOR)
+#error "Debug view tensor visualisation requires preprocess input tensor to be bound."
+#endif
+
+#if defined(NSS_BIND_SRV_NEAREST_DEPTH_COORD)
+layout(set = 0, binding = NSS_BIND_SRV_NEAREST_DEPTH_COORD) uniform highp texture2D r_input_nearest_depth_coord;
+#define _NearestDepthCoordTex sampler2D(r_input_nearest_depth_coord, s_LinearClamp)
+#endif
+
+// Current-frame luma derivative (the value pre-process wrote this frame), read as an SRV.
+#if defined(NSS_BIND_SRV_LUMA_DERIV)
+layout(set = 0, binding = NSS_BIND_SRV_LUMA_DERIV) uniform lowp texture2D r_luma_deriv;
+#define _LumaDerivTex sampler2D(r_luma_deriv, s_LinearClamp)
+#endif
+
+// Reuse preprocess tensor bindings, dimensions and quantization metadata.
+#include "nss/ffx_nss_preprocess.h"
+
+//--------------------------------------------------------------
+// Debug view grid: 4 columns × 4 rows = 16 tiles
+//   Row 0: [history_color    | input_depth          | prev_depth        | nearest_offset]
+//   Row 1: [low_res_color    | motion_vector        | luma_deriv_tm1    | temporal_feedback]
+//   Row 2: [lr_warped_history| disocclusion_mask    | luma_deriv_t      | depth_dilated ]
+//   Row 3: [unjittered_color | motion_detect        | luma_instability  | warp_feedback ]
+//--------------------------------------------------------------
+#define NSS_DEBUG_VIEW_COLS 4
+#define NSS_DEBUG_VIEW_ROWS 4
+
+// ---------------------------------------------------------------------------
+// Tensor decode helpers.
+// The preprocess pass writes model inputs in NHWC layout:
+//   vec0 = [history.r, history.g, history.b, colour.r]
+//   vec1 = [colour.g, colour.b, motion_detector, feedback.r]
+//   vec2 = [feedback.g, feedback.b, feedback.a, luma_derivative]
+// ---------------------------------------------------------------------------
+struct PreprocessTensorInputs
 {
-    uint32_t2 offset;
-    uint32_t2 size;
+    half3 history;
+    half3 colour;
+    half  motion_detector;
+    half4 feedback;
+    half  luma_derivative;
 };
 
-// Macro to cull and draw debug viewport
-#define DRAW_VIEWPORT(function, pos, vp, data)              \
-    {                                                       \
-        int32_t2 posInViewport = getPosInViewport(pos, vp); \
-        function(posInViewport, data);                      \
-    }
-
-int32_t2 getPosInViewport(int32_t2 pos, FfxDebugViewport vp)
+PreprocessTensorInputs ReadPreprocessTensorInputs(int32_t2 process_coord)
 {
-    // the dispatch is w.r.t. to input sizes
-    float2 uv = (float2(pos) + 0.5) * InvInputDims();
-
-    return int32_t2(vp.offset + uv * vp.size);
+    PreprocessTensorInputs inputs;
+    // Read/dequantize via preprocess helper to keep tensor layout decode in one place.
+    ReadFromTensor(process_coord, inputs.history, inputs.colour, inputs.motion_detector, inputs.feedback, inputs.luma_derivative);
+    return inputs;
 }
 
-void DebugView(int32_t2 inputPos)
+// Write model-domain tensor features verbatim. The debug-view target is r11f_g11f_b10f,
+// which stores the full HDR range, so values are NOT clamped to [0,1] to preserves any feature that exceeds 1.0.
+// (The format is unsigned float; negative values, which the preprocess tensor does not
+// produce, are clamped to 0 by the hardware on store.)
+float3 VisualiseTensorRgb(half3 v)
 {
-    float2   uv        = (float2(inputPos) + 0.5) / InputDims();
-    int32_t2 outputPos = int32_t2(uv * OutputDims());
+    return float3(v);
+}
 
-    //Motion
-    float    depthDilated       = float(0.f);
-    int32_t2 nearestPixelOffset = int32_t2(0);
-    FindNearestDepth(inputPos, RenderSize(), depthDilated, nearestPixelOffset);
-    half4 motion = half4(LoadMotion(inputPos + nearestPixelOffset), 0.0HF, 1.0HF);
+float3 VisualiseTensorScalar(half v)
+{
+    return float3(float(v));
+}
 
-    //preprocess Tensor
-    PreprocessTensorElement preprocessTensor         = LoadPreprocessTensor(inputPos);
-    half4                   preprocessWarpedHistory  = half4(preprocessTensor.wh_rgb_col_r.rgb, 1.0HF);
-    half4                   preprocessJitteredColour = half4(preprocessTensor.wh_rgb_col_r.a, preprocessTensor.col_gb_dm_fback_r.rgb);
-    half4                   preprocessFeedback       = half4(preprocessTensor.col_gb_dm_fback_r.a, preprocessTensor.fback_gba_ld.rgb);
-    half4                   preprocessDisoLuma       = half4(preprocessTensor.col_gb_dm_fback_r.b, preprocessTensor.fback_gba_ld.a, 0.0HF, 1.0HF);
+// Visualise a raw [0..1] depth value: emphasise mid-range via sqrt
+float3 VisualiseDepth(float d)
+{
+    float linearized = sqrt(clamp(d, 0.0, 1.0));
+    return float3(linearized);
+}
 
-    //Postprocess raw data
-    half4 k0, k1, k2, k3;
-    LoadKPNRaw(uv, k0, k1, k2, k3);
+// Visualise a 2-channel RG value as (r, g, 0)
+float3 VisualiseRG(float2 rg)
+{
+    return float3(clamp(rg, float2(0.0), float2(1.0)), 0.0);
+}
 
-#if SCALE_MODE == SCALE_2_0X
-    //Postprocess KPNWeight
-    int16_t2   tiledIdx   = (int16_t2(outputPos) + LutOffset()) % int16_t2(IndexModulo());
-    int16_t    lutIdx     = tiledIdx.y * int16_t(IndexModulo()) + tiledIdx.x;
-    KernelTile lut        = kernelLUT[lutIdx];
-    half4      kpnWeights = clamp(LoadKPNWeight(uv, lutIdx), half4(EPS), half4(1.HF));
+// Visualise a SNORM4 value: remap [-1,1] → [0,1]
+float3 VisualiseSnorm4(float4 v)
+{
+    return v.rgb * 0.5 + 0.5;
+}
+
+// Visualise a motion vector as colour: remap [-1,1] → [0,1] per channel
+float3 VisualiseMotion(float2 mv)
+{
+    return float3(mv * 0.5 + 0.5, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Preprocess-equivalent recomputation helpers used to compute the disocclusion mask in preprocess stage.
+// This path intentionally calls preprocess helpers from ffx_nss_preprocess.h
+// to keep one source of truth for NSS feature equations.
+// ---------------------------------------------------------------------------
+void ComputeDisocclusionMask(int32_t2 process_coord, int32_t2 ref_coord, out float out_depth_dilated, out half disocclusion_mask)
+{
+    float2 uv          = (float2(ref_coord) + float2(0.5)) * InvInputDims();
+    float2 uv_pad      = (float2(process_coord) + float2(0.5)) * InvPaddedDims();
+    float2 unjitter_uv = uv - (JitterOffset().xy * InvInputDims());
+
+    float    depth_dilated  = 0.0;
+    int32_t2 nearest_offset = int32_t2(0);
+    FindNearestDepth_4x4(uv, depth_dilated, nearest_offset);
+
+    int32_t2 nearest_input_coord = clamp(ref_coord + nearest_offset, int32_t2(0), InputDims() - int32_t2(1));
+    float2   motion              = LoadMotion(nearest_input_coord);
+
+    float2   reproj_uv      = uv + (motion * InvInputDims());
+    int32_t2 depth_coord    = InputCoordToDepthCoord(ref_coord);
+    float2   reproj_270p_uv = ((float2(depth_coord) + float2(0.5)) * InvDepthTm1Size()) + (motion * InvInputDims());
+    float2   reproj_pad_uv  = uv_pad + MotionToPaddedUvDelta(motion);
+
+#if NSS_PREPROCESS_HALF_RES_INPUT && defined(NSS_BIND_SRV_DISOCCLUSION_MASK_LQ)
+    int32_t2 process_dims    = GetProcessDims();
+    float2   disocclusion_uv = (float2(process_coord) + float2(0.5)) * rcp(float2(process_dims));
+    disocclusion_mask        = half(textureLod(_DisocclusionMaskLQTex, disocclusion_uv, 0.0).r);
 #else
-    half4 kpnWeights = half4(0.0HF);  //No vec4 kpn weights for this method.
+    disocclusion_mask = half(ComputeDepthClipInt(reproj_270p_uv, depth_dilated, RenderSize(), DeviceToViewDepth()));
 #endif
-    //Temporal parameters
-    half theta, alpha;
-    LoadTemporalParameters(uv, theta, alpha);
-    half4 tempParam = half4(theta, alpha, 0.0HF, 1.0HF);
 
-    //Output
-    half4 upscaledOutput = LoadUpscaledOutput(outputPos);
+    out_depth_dilated = depth_dilated;
+}
 
-#define VIEWPORT_GRID_SIZE_X 4
-#define VIEWPORT_GRID_SIZE_Y 3
+int32_t2 TileUvToTexelPos(float2 tileUV, int32_t2 textureSizeXY)
+{
+    int32_t2 texelPos = int32_t2(tileUV * float2(textureSizeXY));
+    return clamp(texelPos, int32_t2(0), textureSizeXY - int32_t2(1));
+}
 
-    float2 fViewportScale = float2(1.0f / VIEWPORT_GRID_SIZE_X, 1.0f / VIEWPORT_GRID_SIZE_Y);
+float4 SampleDebugTile(int32_t tileX, int32_t tileY, float2 tileUV)
+{
+    int32_t2               debugOutputDims = GetDebugViewDimensions();
+    int32_t2               inputPos        = int32_t2(tileUV * float2(InputDims()));
+    int32_t2               outputPos       = int32_t2(tileUV * float2(debugOutputDims));
+    int32_t2               processCoord    = TileUvToTexelPos(tileUV, GetProcessDims());
+    PreprocessTensorInputs tensorInputs    = ReadPreprocessTensorInputs(processCoord);
 
-    uint32_t2 iViewportSize = uint32_t2(GetDebugViewDimensions() * fViewportScale);
+    inputPos  = clamp(inputPos, int32_t2(0), InputDims() - int32_t2(1));
+    outputPos = clamp(outputPos, int32_t2(0), debugOutputDims - int32_t2(1));
 
-    // compute grid [y][x] for easier placement of viewports
-    FfxDebugViewport vp[VIEWPORT_GRID_SIZE_Y][VIEWPORT_GRID_SIZE_X];
-    for (int32_t y = 0; y < VIEWPORT_GRID_SIZE_Y; y++)
+    float3 rgb = float3(0.0);
+
+    if (tileY == 0)
     {
-        for (int32_t x = 0; x < VIEWPORT_GRID_SIZE_X; x++)
+        if (tileX == 0)
         {
-            vp[y][x].offset = iViewportSize * uint32_t2(x, y);
-            vp[y][x].size   = iViewportSize;
+            // History color from previous-frame upscaled texture (output resolution).
+            rgb = texelFetch(sampler2D(r_prev_upscaled_color, s_LinearClamp), outputPos, 0).rgb;
+        }
+        else if (tileX == 1)
+        {
+            // Input depth (render resolution)
+            float d = texelFetch(sampler2D(r_input_depth, s_PointClamp), inputPos, 0).r;
+            rgb     = VisualiseDepth(d);
+        }
+        else if (tileX == 2)
+        {
+            // Reconstructed prev depth (native texture size, scaled to full tile)
+            int32_t2 depthTm1Pos = TileUvToTexelPos(tileUV, int32_t2(textureSize(r_prev_depth, 0)));
+            uint     rawDepth    = texelFetch(_DepthTm1Tex, depthTm1Pos, 0).r;
+            float    d           = uintBitsToFloat(rawDepth);
+            rgb                  = VisualiseDepth(d);
+        }
+        else  // tileX == 3
+        {
+            // Nearest depth coordinate offset (native texture size, scaled to full tile)
+            int32_t2 nearestDepthPos = TileUvToTexelPos(tileUV, int32_t2(textureSize(r_input_nearest_depth_coord, 0)));
+            float    v               = texelFetch(_NearestDepthCoordTex, nearestDepthPos, 0).r;
+            rgb                      = float3(v);
+        }
+    }
+    else if (tileY == 1)
+    {
+        if (tileX == 0)
+        {
+            // Low-res / jittered input color (render resolution)
+            rgb = texelFetch(sampler2D(r_input_color_jittered, s_LinearClamp), inputPos, 0).rgb;
+        }
+        else if (tileX == 1)
+        {
+            // Motion vectors (render resolution) — visualised as colour
+            float2 mv = texelFetch(sampler2D(r_input_motion_vectors, s_LinearClamp), inputPos, 0).rg;
+            rgb       = VisualiseMotion(mv);
+        }
+        else if (tileX == 2)
+        {
+            // Previous-frame luma derivative state (native texture size, scaled to full tile)
+            int32_t2 lumaDerivPos = TileUvToTexelPos(tileUV, int32_t2(textureSize(r_prev_luma_deriv, 0)));
+            float4   ld           = texelFetch(_LumaDerivTm1Tex, lumaDerivPos, 0);
+            rgb                   = VisualiseSnorm4(ld);
+        }
+        else  // tileX == 3
+        {
+            // Temporal feedback tensor (native texture size, scaled to full tile)
+            int32_t2 feedbackPos = TileUvToTexelPos(tileUV, int32_t2(textureSize(r_temporal_feedback_tensor, 0)));
+            float4   fb          = texelFetch(_FeedbackTensor, feedbackPos, 0);
+            rgb                  = VisualiseSnorm4(fb);
+        }
+    }
+    else if (tileY == 2)
+    {
+        // disocclusion_mask: original preprocess-equivalent recomputation.
+        int32_t2 preprocessRefCoord = ProcessCoordToInputCoord(processCoord);
+
+        half  disocclusion_mask;
+        float depth_dilated;
+        ComputeDisocclusionMask(processCoord, preprocessRefCoord, depth_dilated, disocclusion_mask);
+
+        if (tileX == 0)
+        {
+            // lr_warped_history read from the preprocess input tensor (per request).
+            rgb = VisualiseTensorRgb(tensorInputs.history);
+        }
+        else if (tileX == 1)
+        {
+            rgb = float3(disocclusion_mask);
+        }
+        else if (tileX == 2)
+        {
+            // luma_deriv_t: the current-frame luma derivative pre-process wrote (rw_luma_deriv),
+            // read here as an SRV (R8G8B8A8_SNORM, remapped [-1,1] -> [0,1]).
+#if defined(NSS_BIND_SRV_LUMA_DERIV)
+            int32_t2 lumaDerivPos = TileUvToTexelPos(tileUV, int32_t2(textureSize(r_luma_deriv, 0)));
+            float4   ld           = texelFetch(_LumaDerivTex, lumaDerivPos, 0);
+            rgb                   = VisualiseSnorm4(ld);
+#endif
+        }
+        else  // tileX == 3
+        {
+            // depth_dilated: the depth-dilated value used to compute the disocclusion mask.
+            rgb = float3(depth_dilated, 0.0, 0.0);
+        }
+    }
+    else  // tileY == 3 — all tiles read from the preprocess input tensor (WriteToTensor inputs)
+    {
+        if (tileX == 0)
+        {
+            // unjittered_color: the colour channel of the model input tensor.
+            rgb = VisualiseTensorRgb(tensorInputs.colour);
+        }
+        else if (tileX == 1)
+        {
+            // motion_detect: the motion-detector channel of the model input tensor.
+            rgb = VisualiseTensorScalar(tensorInputs.motion_detector);
+        }
+        else if (tileX == 2)
+        {
+            // luma_instability: the luma-derivative channel of the model input tensor.
+            rgb = VisualiseTensorScalar(tensorInputs.luma_derivative);
+        }
+        else  // tileX == 3
+        {
+            // warp_feedback: the warped temporal-feedback (RGB) channel of the model input tensor.
+            rgb = VisualiseTensorRgb(tensorInputs.feedback.rgb);
         }
     }
 
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[0][0], preprocessWarpedHistory);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[0][1], preprocessJitteredColour);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[0][2], preprocessFeedback);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[0][3], preprocessDisoLuma);
-
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[1][0], k0);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[1][1], k1);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[1][2], k2);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[1][3], k3);
-
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[2][0], motion);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[2][1], kpnWeights);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[2][2], tempParam);
-    DRAW_VIEWPORT(StoreDebugView, inputPos, vp[2][3], upscaledOutput);
+    return float4(rgb, 1.0);
 }
+
+//--------------------------------------------------------------
+// DebugView — shared implementation (dispatched at output/upscale resolution)
+//--------------------------------------------------------------
+void DebugView(int32_t2 pxPos)
+{
+    int32_t2 debugDims = GetDebugViewDimensions();
+
+    float4 colour;
+
+    if (DebugViewMode() != NSS_DEBUG_VIEW_MODE_ALL)
+    {
+        // Single-tile fullscreen mode: map the entire output to one resource
+        int32_t tileX  = int32_t((DebugViewMode() - 1u) % uint(NSS_DEBUG_VIEW_COLS));
+        int32_t tileY  = int32_t((DebugViewMode() - 1u) / uint(NSS_DEBUG_VIEW_COLS));
+        float2  tileUV = (float2(pxPos) + float2(0.5)) / float2(debugDims);
+        colour         = SampleDebugTile(tileX, tileY, tileUV);
+    }
+    else
+    {
+        int32_t tileW = debugDims.x / NSS_DEBUG_VIEW_COLS;
+        int32_t tileH = debugDims.y / NSS_DEBUG_VIEW_ROWS;
+
+        int32_t tileX  = pxPos.x / tileW;
+        int32_t tileY  = pxPos.y / tileH;
+        int32_t localX = pxPos.x - tileX * tileW;
+        int32_t localY = pxPos.y - tileY * tileH;
+
+        tileX = clamp(tileX, 0, NSS_DEBUG_VIEW_COLS - 1);
+        tileY = clamp(tileY, 0, NSS_DEBUG_VIEW_ROWS - 1);
+
+        float2 tileUV = (float2(localX, localY) + float2(0.5)) / float2(tileW, tileH);
+        colour        = SampleDebugTile(tileX, tileY, tileUV);
+    }
+
+    StoreDebugView(pxPos, colour);
+}
+
+//--------------------------------------------------------------
+// DebugViewCS — compute entry point wrapper
+//--------------------------------------------------------------
+void DebugViewCS(int32_t2 outPos)
+{
+    int32_t2 debugDims = GetDebugViewDimensions();
+    if (!IsOnScreen(outPos, debugDims))
+        return;
+    DebugView(outPos);
+}
+
+//--------------------------------------------------------------
+// DebugViewFS — fragment entry point wrapper
+//--------------------------------------------------------------
+void DebugViewFS(int32_t2 fragPos)
+{
+    DebugView(fragPos);
+}
+
 #endif  // GPU_NSS_DEBUG_VIEW_H

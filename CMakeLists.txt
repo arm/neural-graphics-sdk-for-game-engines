@@ -24,7 +24,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.21)
-message(STATUS "Start configure arm-ng-sdk")
+message(STATUS "Start configure neural-graphics-sdk-for-game-engines")
 project (neural_graphics_sdk)
 
 # FFX_GRAPHICS_API is the graphics API: VK, DX12, etc.
@@ -53,6 +53,8 @@ else()
     message(FATAL_ERROR "Unsupported FFX_API_BACKEND: ${FFX_API_BACKEND}")
 endif()
 
+set(SDK_LIB_NAME ngsdk_${FFX_PLATFORM_NAME})
+
 message(STATUS "API: ${FFX_GRAPHICS_API}, OS: ${FFX_OS_NAME}, ARCH: ${FFX_ARCH_NAME}")
 
 # some architecture verification
@@ -74,6 +76,7 @@ endif()
 if(WIN32)
     set(WINDOWS TRUE)
     message("++ Building for Windows")
+    add_definitions(-DFFX_PLATFORM_WINDOWS=1)
     if(NOT FFX_OS_NAME STREQUAL "windows")
         message(FATAL_ERROR "The targeted OS does not match FFX_API_BACKEND")
     endif()
@@ -91,6 +94,7 @@ elseif(APPLE)
 elseif(ANDROID)
     set(ANDROID TRUE)
     message("++ Building for Android")
+    add_definitions(-DFFX_PLATFORM_ANDROID=1)
     if(NOT FFX_OS_NAME STREQUAL "android")
         message(FATAL_ERROR "The targeted OS does not match FFX_API_BACKEND")
     endif()
@@ -102,6 +106,7 @@ elseif(ANDROID)
 elseif(UNIX)
     set(LINUX TRUE)
     message("++ Building for Linux")
+    add_definitions(-DFFX_PLATFORM_LINUX=1)
     if(NOT FFX_OS_NAME STREQUAL "linux")
         message(FATAL_ERROR "The targeted OS does not match FFX_API_BACKEND")
     endif()
@@ -113,11 +118,22 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_definitions(_DEBUG)
 endif()
 
+set(FFX_DEBUG_DEFAULT OFF)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(FFX_DEBUG_DEFAULT ON)
+endif()
+
+option(FFX_DEBUG "Enable FidelityFX debug code paths guarded by #ifdef FFX_DEBUG" ${FFX_DEBUG_DEFAULT})
+if(FFX_DEBUG)
+    message(STATUS "FFX_DEBUG=ON (adding compile definition FFX_DEBUG)")
+    add_compile_definitions(FFX_DEBUG)
+endif()
+
 if(FFX_FSR3_AS_LIBRARY)
     message(STATUS "Building FSR3 as a third-party library")
 endif()
 
-# The FFX_BUILD_AS_DLL will be used to control whether to build the armng sdk as a shared library.
+# The FFX_BUILD_AS_DLL will be used to control whether to build the sdk as a shared library.
 # The FFX_BUILD_BACKEND_AS_DLL and FFX_BUILD_COMPONENT_AS_DLL control how the backend and components are linked.
 if(NOT DEFINED FFX_BUILD_AS_DLL)
     set(FFX_BUILD_AS_DLL OFF)
@@ -137,6 +153,17 @@ if(NOT FFX_BUILD_AS_DLL)
 endif()
 
 set(FFX_GLSL ON)
+# disable ASR to focus on NSS part
 set(FFX_NSS ON)
+set(FFX_FI ON)
+set(FFX_OF ON)
 
 add_subdirectory(./ffx-api)
+
+option(FFX_BUILD_SAMPLES "Build the Sample code (samples/)" OFF)
+if(FFX_BUILD_SAMPLES)
+    add_subdirectory(samples)
+endif()
+
+# Build the NG-feature Vulkan layer (VkLayer_arm_NG) alongside the SDK.
+add_subdirectory(layer)

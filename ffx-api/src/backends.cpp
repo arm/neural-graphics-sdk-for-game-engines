@@ -25,6 +25,7 @@
 #ifdef FFX_BACKEND_VK
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
 #include <ffx_api/vk/ffx_api_vk.h>
+#include <FidelityFX/host/backends/vk/vk_wrapper.h>
 #endif  // #ifdef FFX_BACKEND_VK
 
 ffxReturnCode_t CreateBackend(const ffxCreateContextDescHeader* desc, bool& backendFound, FfxInterface* iface, size_t contexts, Allocator& alloc)
@@ -41,15 +42,17 @@ ffxReturnCode_t CreateBackend(const ffxCreateContextDescHeader* desc, bool& back
                 return FFX_API_RETURN_ERROR;
             backendFound = true;
 
-            const auto*     backendDesc       = reinterpret_cast<const ffxCreateBackendVKDesc*>(it);
-            VkDeviceContext deviceContext     = {backendDesc->vkDevice,
+            const auto*     backendDesc   = reinterpret_cast<const ffxCreateBackendVKDesc*>(it);
+            VkDeviceContext deviceContext = {backendDesc->vkDevice,
                                              backendDesc->vkPhysicalDevice,
                                              backendDesc->vkDeviceProcAddr,
                                              backendDesc->vkInstance,
                                              backendDesc->vkGetInstanceProcAddr};
-            FfxDevice       device            = ffxGetDeviceVK(&deviceContext);
-            size_t          scratchBufferSize = ffxGetScratchMemorySizeVK(deviceContext, contexts);
-            void*           scratchBuffer     = alloc.alloc(scratchBufferSize);
+            const bool      wrapper_init  = InitVulkanWrapper(deviceContext);
+            FFX_ASSERT(wrapper_init);
+            FfxDevice device            = ffxGetDeviceVK(&deviceContext);
+            size_t    scratchBufferSize = ffxGetScratchMemorySizeVK(deviceContext, contexts);
+            void*     scratchBuffer     = alloc.alloc(scratchBufferSize);
             memset(scratchBuffer, 0, scratchBufferSize);
             TRY2(ffxGetInterfaceVK(iface, device, scratchBuffer, scratchBufferSize, contexts));
             break;

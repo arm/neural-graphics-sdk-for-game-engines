@@ -25,7 +25,7 @@
 
 #pragma once
 
-#include <FidelityFX/host/ffx_types.h>
+#include "ffx_types.h"
 #if !defined(_WIN32)
 #include <wchar.h>
 #include <stdexcept>
@@ -110,6 +110,16 @@ const float FFX_EPSILON = 1e-06f;
 ///
 /// @ingroup Utils
 #define FFX_DIVIDE_ROUNDING_UP(x, y) ((x + y - 1) / y)
+
+/// Helper macro to compute the rounded-up integer division of two unsigned integers
+///
+/// @ingroup Utils
+#define FFX_DIV_ALIGN(n, a) (((n) + ((a)-1)) / (a))
+
+/// Helper macro to align an integer to the specified boundary
+///
+/// @ingroup Utils
+#define FFX_ALIGN(n, a) (FFX_DIV_ALIGN(n, a) * (a))
 
 /// Helper macro to stringify a value.
 ///
@@ -229,3 +239,41 @@ inline uint8_t ffxCountBitsSet(uint32_t val) noexcept
     return static_cast<uint8_t>(((c >> 16) + c) & 0x0000FFFF);
 #endif
 }
+
+/// @brief Get the optical flow texture size.
+///
+/// @param displaySize               The display size.
+/// @param opticalFlowBlockSize      The optical flow block size.
+///
+/// @return
+/// The optical flow texture size.
+///
+/// @ingroup Utils
+FFX_API FfxDimensions2D GetOpticalFlowTextureSizeFromBlockSize(const FfxDimensions2D& displaySize, const uint32_t opticalFlowBlockSize);
+
+/// @brief Get the optical flow block size.
+///
+/// @param gridSize               The optical flow grid size.
+///
+/// @return
+/// The optical flow block size.
+///
+/// @ingroup Utils
+FFX_API uint32_t GetOpticalFlowBlockSize(const FfxOpticalFlowGridSize gridSize);
+
+/// @brief Invert a 4x4 matrix.
+///
+/// @param [in] m                The input matrix.
+/// @param [out] out              The inverted matrix.
+///
+/// @ingroup Utils
+FFX_API void MatrixInvert4x4(const FfxFloat32x4x4 m, FfxFloat32x4x4 out);
+
+/// @brief Multiply two 4x4 matrices.
+///
+/// @param [in] a                The first input matrix.
+/// @param [in] b                The second input matrix.
+/// @param [out] out              The resulting matrix.
+///
+/// @ingroup Utils
+FFX_API void MatrixMul4x4(const FfxFloat32x4x4 a, const FfxFloat32x4x4 b, FfxFloat32x4x4 out);

@@ -20,16 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
-
 #include "validation.h"
 
 #ifdef FFX_BACKEND_VK
 #include <ffx_api/vk/ffx_api_vk.h>
 #endif  // #ifdef FFX_BACKEND_VK
 
+#include <ffx_api/ffx_nss.h>
 #include <ffx_api/ffx_upscale.h>
+#include <ffx_api/ffx_framegeneration.h>
 
 #include <algorithm>
 #include <sstream>

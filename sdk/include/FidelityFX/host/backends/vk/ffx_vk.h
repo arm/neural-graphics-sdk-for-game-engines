@@ -30,7 +30,7 @@
 
 #include <vulkan/vulkan.h>
 
-#include <FidelityFX/host/ffx_interface.h>
+#include "../../ffx_interface.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -179,7 +179,7 @@ FFX_API FfxPipeline ffxGetPipelineVK(VkPipeline pipeline);
 /// @ingroup VKBackend
 FFX_API FfxResource ffxGetResourceVK(void*                  vkResource,
                                      FfxResourceDescription ffxResDescription,
-                                     const wchar_t*         ffxResName,
+                                     const char*            ffxResName,
                                      FfxResourceStates      state = FFX_RESOURCE_STATE_COMPUTE_READ);
 
 /// Fetch a <c><i>FfxSurfaceFormat</i></c> from a VkFormat.
@@ -294,7 +294,7 @@ FFX_API FfxErrorCode ffxWaitForPresents(FfxSwapchain gameSwapChain);
 /// FFX_ERROR_INVALID_ARGUMENT          Could not query the interface for the frame interpolation swap chain.
 ///
 /// @ingroup VKFrameInterpolation
-FFX_API FfxErrorCode ffxRegisterFrameinterpolationUiResourceVK(FfxSwapchain gameSwapChain, FfxResource uiResource, uint32_t flags);
+FFX_API FfxErrorCode ffxRegisterFrameinterpolationUiResourceVK(FfxSwapchain gameSwapChain, const FfxResource& uiResource, uint32_t flags);
 
 /// Fetches a <c><i>FfxCommandList</i></c> from the <c><i>FfxSwapchain</i></c>.
 ///
@@ -390,7 +390,6 @@ struct FfxSwapchainReplacementFunctions
     PFN_getLastPresentCountFFX  getLastPresentCountFFX;
 };
 FFX_API FfxErrorCode ffxGetSwapchainReplacementFunctionsVK(FfxDevice device, FfxSwapchainReplacementFunctions* functions);
-
 #if defined(__cplusplus)
 }
 #endif  // #if defined(__cplusplus)

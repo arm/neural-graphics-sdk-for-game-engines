@@ -68,4 +68,13 @@ namespace ffx
     {
     };
 
+    template <>
+    struct struct_type<ffxApiQueryDescNssGetPipelineStageInfo> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_NSS_GETPIPELINESTAGEINFO>
+    {
+    };
+
+    struct QueryDescNssGetPipelineStageInfo : public InitHelper<ffxApiQueryDescNssGetPipelineStageInfo>
+    {
+    };
+
 }  // namespace ffx

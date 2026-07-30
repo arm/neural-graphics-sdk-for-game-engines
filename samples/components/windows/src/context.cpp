@@ -1,4 +1,5 @@
-/* Copyright (c) 2023, Thomas Atkinson
+/* Copyright (c) 2026, Arm Limited and Contributors
+ * Copyright (c) 2023, Thomas Atkinson
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -83,7 +84,7 @@ inline std::vector<std::string> get_args()
 WindowsPlatformContext::WindowsPlatformContext(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, INT nCmdShow) :
     PlatformContext{}
 {
-	_external_storage_directory = "";
+	_external_storage_directory = find_samples_root();
 	_temp_directory             = get_temp_path_from_environment();
 	_arguments                  = get_args();
 

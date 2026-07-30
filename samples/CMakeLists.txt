@@ -17,7 +17,9 @@
 # limitations under the License.
 #
 
-list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_SOURCE_DIR}/bldsys/cmake/module")
+set(SAMPLES_ROOT "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH "Samples checkout root")
+
+list(INSERT CMAKE_MODULE_PATH 0 "${SAMPLES_ROOT}/bldsys/cmake/module")
 
 if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER AND NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)
     find_program(CCACHE_FOUND ccache)
@@ -121,6 +123,9 @@ include(global_options)
 include(sample_helper)
 include(check_atomic)
 include(component_helper)
+include(check_sample_dependencies)
+
+require_sample_dependencies()
 
 # Add third party libraries
 add_subdirectory(third_party)
