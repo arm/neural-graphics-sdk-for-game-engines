@@ -20,20 +20,33 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "ffx_provider_nss.h"
+#if FFX_CAPTURE_ENABLED
+#include "capture/neuralssuperresolution.h"
+#endif
 #include "backends.h"
 #include "validation.h"
 #include <ffx_api/ffx_nss.hpp>
 #ifdef FFX_BACKEND_VK
 #include <ffx_api/vk/ffx_api_vk.h>
 #endif  // #ifdef FFX_BACKEND_VK
-#include <FidelityFX/gpu/nss/ffx_nss_resources.h>
+#include <ffx_heap_tracker.hpp>
 #include <FidelityFX/host/ffx_nss.h>
 
+#include <new>
 #include <stdlib.h>
+#include <cstdint>
+#include <cstring>
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "NSSProvider";
+}
 
 static_assert(static_cast<uint32_t>(FfxNssShaderQualityMode::FFX_NSS_SHADER_QUALITY_MODE_QUALITY) ==
               static_cast<uint32_t>(FfxApiNssShaderQualityMode::FFX_API_NSS_SHADER_QUALITY_MODE_QUALITY));
@@ -47,22 +60,26 @@ static uint32_t ConvertContextFlagsNss(uint32_t apiFlags)
     uint32_t outFlags = 0;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_QUANTIZED)
         outFlags |= FFX_NSS_CONTEXT_FLAG_QUANTIZED;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_LOW_DYNAMIC_RANGE)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_LOW_DYNAMIC_RANGE;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_DEPTH_INVERTED)
         outFlags |= FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_DEPTH_INFINITE)
         outFlags |= FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC)
         outFlags |= FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_DISABLE_16BIT)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_DISABLE_16BIT;
     if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_MANAGE_HISTORY)
         outFlags |= FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT;
-    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT)
-        outFlags |= FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE;
+    if (apiFlags & FFX_API_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION)
+        outFlags |= FFX_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
     return outFlags;
 }
 
@@ -96,14 +113,47 @@ const char* ffxProvider_Nss::GetVersionName() const
     return MAKE_VERSION_STRING(FFX_NSS_VERSION_MAJOR, FFX_NSS_VERSION_MINOR, FFX_NSS_VERSION_PATCH);
 }
 
+#if FFX_CAPTURE_ENABLED
+using CaptureController = arm::capture::neuralssuperresolution::Controller;
+#endif
+
 struct InternalNssContext
 {
     InternalContextHeader header;
-    FfxInterface          backendInterface;
-    FfxResourceInternal   sharedResources[FFX_NSS_RESOURCE_IDENTIFIER_COUNT];
-    FfxNssContext         context;
-    ffxApiMessage         fpMessage;
+#ifdef FFX_ENABLE_CPU_HEAP_TRACKING
+    ffx::EffectHeapTracker heapTracker;
+#endif
+    FfxInterface  backendInterface;
+    FfxNssContext context;
+    ffxApiMessage fpMessage;
+#if FFX_CAPTURE_ENABLED
+    CaptureController* controller;
+#endif
 };
+
+static void FreeInternalNssContext(InternalNssContext* context, Allocator& alloc)
+{
+#ifdef FFX_ENABLE_CPU_HEAP_TRACKING
+    Allocator trackedAlloc = alloc.withTracker(context->heapTracker);
+#else
+    Allocator& trackedAlloc = alloc;
+#endif
+    if (context->backendInterface.scratchBuffer)
+    {
+        trackedAlloc.dealloc(context->backendInterface.scratchBuffer, context->backendInterface.scratchBufferSize);
+    }
+#if FFX_CAPTURE_ENABLED
+    if (context->controller)
+    {
+        arm::capture::DestroyCaptureController(trackedAlloc, context->controller);
+    }
+#endif
+#ifdef FFX_ENABLE_CPU_HEAP_TRACKING
+    context->heapTracker.Remove(sizeof(InternalNssContext));
+    context->heapTracker.~EffectHeapTracker();
+#endif
+    alloc.dealloc(context, sizeof(InternalNssContext));
+}
 
 ffxReturnCode_t ffxProvider_Nss::CreateContext(ffxContext* context, ffxCreateContextDescHeader* header, Allocator& alloc) const
 {
@@ -120,9 +170,21 @@ ffxReturnCode_t ffxProvider_Nss::CreateContext(ffxContext* context, ffxCreateCon
         }
         InternalNssContext* internal_context = alloc.construct<InternalNssContext>();
         VERIFY(internal_context, FFX_API_RETURN_ERROR_MEMORY);
+        memset(internal_context, 0, sizeof(*internal_context));
+#ifdef FFX_ENABLE_CPU_HEAP_TRACKING
+        ::new (&internal_context->heapTracker) ffx::EffectHeapTracker(sizeof(InternalNssContext));
+        Allocator trackedAlloc = alloc.withTracker(internal_context->heapTracker);
+#else
+        Allocator& trackedAlloc = alloc;
+#endif
         internal_context->header.provider = this;
 
-        TRY(MustCreateBackend(header, &internal_context->backendInterface, 1, alloc));
+        const ffxReturnCode_t backendResult = MustCreateBackend(header, &internal_context->backendInterface, 1, trackedAlloc);
+        if (backendResult != FFX_API_RETURN_OK)
+        {
+            FreeInternalNssContext(internal_context, alloc);
+            return backendResult;
+        }
 
         FfxNssContextDescription initializationParameters = {};
         initializationParameters.backendInterface         = internal_context->backendInterface;
@@ -147,13 +209,32 @@ ffxReturnCode_t ffxProvider_Nss::CreateContext(ffxContext* context, ffxCreateCon
         internal_context->fpMessage = desc->fpMessage;
 
         // Create the NSS context
-        TRY2(ffxNssContextCreate(&internal_context->context, &initializationParameters));
+        const FfxErrorCode createResult = ffxNssContextCreate(&internal_context->context, &initializationParameters);
+        if (createResult != FFX_OK)
+        {
+            FreeInternalNssContext(internal_context, alloc);
+            return createResult == FFX_ERROR_INVALID_ARGUMENT ? FFX_API_RETURN_ERROR_PARAMETER : FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+        }
+
+#if FFX_CAPTURE_ENABLED
+        // A successfully created provider context owns a capture controller when
+        // runtime capture integration is enabled for this build.
+        internal_context->controller =
+            arm::capture::MakeCaptureController<CaptureController>(trackedAlloc, internal_context->backendInterface.device, desc->flags);
+        if (!internal_context->controller)
+        {
+            ffxNssContextDestroy(&internal_context->context);
+            FreeInternalNssContext(internal_context, alloc);
+            return FFX_API_RETURN_ERROR_MEMORY;
+        }
+#endif
 
         *context = internal_context;
         return FFX_API_RETURN_OK;
     }
     else
     {
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported NSS create descriptor");
         return FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE;
     }
 }
@@ -164,22 +245,40 @@ ffxReturnCode_t ffxProvider_Nss::DestroyContext(ffxContext* context, Allocator& 
     VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
 
     InternalNssContext* internal_context = reinterpret_cast<InternalNssContext*>(*context);
-
-    for (FfxUInt32 i = 0; i < FFX_NSS_RESOURCE_IDENTIFIER_COUNT; i++)
+#if FFX_CAPTURE_ENABLED
+    if (internal_context->controller)
     {
-        TRY2(internal_context->backendInterface.fpDestroyResource(&internal_context->backendInterface, internal_context->sharedResources[i], 0));
+        if (!internal_context->controller->Shutdown())
+            return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
     }
+#endif
 
-    TRY2(ffxNssContextDestroy(&internal_context->context));
-
-    alloc.dealloc(internal_context->backendInterface.scratchBuffer);
-    alloc.dealloc(internal_context);
+    if (ffxNssContextDestroy(&internal_context->context) != FFX_OK)
+    {
+        return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+    }
+    FreeInternalNssContext(internal_context, alloc);
+    *context = nullptr;
 
     return FFX_API_RETURN_OK;
 }
 
 ffxReturnCode_t ffxProvider_Nss::Configure(ffxContext* context, const ffxConfigureDescHeader* header) const
 {
+    VERIFY(context, FFX_API_RETURN_ERROR_PARAMETER);
+    VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
+    VERIFY(header, FFX_API_RETURN_ERROR_PARAMETER);
+
+    InternalNssContext* internal_context = reinterpret_cast<InternalNssContext*>(*context);
+    if (auto desc = ffx::DynamicCast<ffxApiConfigureDescCapture>(header))
+    {
+#if !FFX_CAPTURE_ENABLED
+        (void)desc;
+        return FFX_API_RETURN_ERROR_PARAMETER;
+#else
+        return internal_context->controller->Configure(*desc);
+#endif
+    }
     return FFX_API_RETURN_OK;
 }
 
@@ -187,9 +286,9 @@ ffxReturnCode_t ffxProvider_Nss::Query(ffxContext* context, ffxQueryDescHeader* 
 {
     VERIFY(header, FFX_API_RETURN_ERROR_PARAMETER);
 
-    if (context)
+    InternalNssContext* internal_context = context && *context ? reinterpret_cast<InternalNssContext*>(*context) : nullptr;
+    if (internal_context)
     {
-        InternalNssContext* internal_context = reinterpret_cast<InternalNssContext*>(*context);
         if (internal_context->fpMessage)
         {
             Validator{internal_context->fpMessage, header}.NoExtensions();
@@ -198,6 +297,19 @@ ffxReturnCode_t ffxProvider_Nss::Query(ffxContext* context, ffxQueryDescHeader* 
 
     switch (header->type)
     {
+    case FFX_API_QUERY_DESC_TYPE_CAPTURESTATUS:
+    {
+        VERIFY(context, FFX_API_RETURN_ERROR_PARAMETER);
+        VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
+        auto desc = reinterpret_cast<ffxApiQueryDescCaptureStatus*>(header);
+        VERIFY(desc->pOutStatus, FFX_API_RETURN_ERROR_PARAMETER);
+#if !FFX_CAPTURE_ENABLED
+        return FFX_API_RETURN_ERROR_PARAMETER;
+#else
+        internal_context->controller->GetStatus(*desc->pOutStatus);
+        return FFX_API_RETURN_OK;
+#endif
+    }
     case FFX_API_QUERY_DESC_TYPE_NSS_GETJITTEROFFSET:
     {
         auto  desc = reinterpret_cast<ffxApiQueryDescNssGetJitterOffset*>(header);
@@ -224,16 +336,44 @@ ffxReturnCode_t ffxProvider_Nss::Query(ffxContext* context, ffxQueryDescHeader* 
         }
         break;
     }
-    case FFX_API_QUERY_DESC_TYPE_NSS_GETPIPELINESTAGEINFO:
+    case FFX_API_QUERY_DESC_TYPE_NSS_GPU_MEMORY_USAGE:
     {
         VERIFY(context, FFX_API_RETURN_ERROR_PARAMETER);
         VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
-        InternalNssContext* internal_context = reinterpret_cast<InternalNssContext*>(*context);
-        auto                desc             = reinterpret_cast<ffxApiQueryDescNssGetPipelineStageInfo*>(header);
-        TRY2(ffxNssGetPipelineStageInfo(&internal_context->context, desc->pOutPreProcessUsesFragment, desc->pOutPostProcessUsesFragment));
+
+        auto desc = reinterpret_cast<ffxApiQueryDescNssGetGPUMemoryUsage*>(header);
+        VERIFY(desc->gpuMemoryUsageNss, FFX_API_RETURN_ERROR_PARAMETER);
+
+        FfxEffectMemoryUsage usage{};
+        FfxEffectMemoryUsage backendUsage{};
+        TRY2(ffxNssContextGetGpuMemoryUsage(&internal_context->context, &usage));
+        TRY2(internal_context->backendInterface.fpGetBackendGpuMemoryUsage(&internal_context->backendInterface, &backendUsage));
+
+        desc->gpuMemoryUsageNss->totalUsageInBytes     = usage.totalUsageInBytes + backendUsage.totalUsageInBytes;
+        desc->gpuMemoryUsageNss->textureUsageInBytes   = usage.textureUsageInBytes + backendUsage.textureUsageInBytes;
+        desc->gpuMemoryUsageNss->bufferUsageInBytes    = usage.bufferUsageInBytes + backendUsage.bufferUsageInBytes;
+        desc->gpuMemoryUsageNss->tensorUsageInBytes    = usage.tensorUsageInBytes + backendUsage.tensorUsageInBytes;
+        desc->gpuMemoryUsageNss->dataGraphUsageInBytes = usage.dataGraphUsageInBytes + backendUsage.dataGraphUsageInBytes;
+        desc->gpuMemoryUsageNss->aliasableUsageInBytes = usage.aliasableUsageInBytes + backendUsage.aliasableUsageInBytes;
         break;
     }
+#ifdef FFX_ENABLE_CPU_HEAP_TRACKING
+    case FFX_API_QUERY_DESC_TYPE_NSS_CPU_MEMORY_USAGE:
+    {
+        VERIFY(context, FFX_API_RETURN_ERROR_PARAMETER);
+        VERIFY(*context, FFX_API_RETURN_ERROR_PARAMETER);
+
+        auto desc = reinterpret_cast<ffxApiQueryDescNssGetCPUMemoryUsage*>(header);
+        VERIFY(desc->cpuMemoryUsageNss, FFX_API_RETURN_ERROR_PARAMETER);
+
+        FfxApiEffectCpuMemoryUsage& usage = *desc->cpuMemoryUsageNss;
+        usage.currentUsageInBytes         = internal_context->heapTracker.GetCurrentUsageInBytes();
+        usage.peakUsageInBytes            = internal_context->heapTracker.GetPeakUsageInBytes();
+        break;
+    }
+#endif
     default:
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported NSS query descriptor");
         return FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE;
     }
 
@@ -258,6 +398,12 @@ ffxReturnCode_t ffxProvider_Nss::Dispatch(ffxContext* context, const ffxDispatch
     {
         auto desc = reinterpret_cast<const ffxApiDispatchDescNss*>(header);
 
+#if FFX_CAPTURE_ENABLED
+        const bool captureActive = internal_context->controller->BeginDispatchCapture(*desc, internal_context->context);
+#else
+        constexpr bool captureActive = false;
+#endif
+
         FfxNssDispatchDescription dispatchParameters = {};
         dispatchParameters.commandList               = desc->commandList;
         dispatchParameters.color                     = Convert(desc->color);
@@ -271,25 +417,45 @@ ffxReturnCode_t ffxProvider_Nss::Dispatch(ffxContext* context, const ffxDispatch
         dispatchParameters.cameraNear                = desc->cameraNear;
         dispatchParameters.cameraFovAngleVertical    = desc->cameraFovAngleVertical;
         dispatchParameters.exposure                  = desc->exposure;
+        dispatchParameters.exposureTexture           = Convert(desc->exposureTexture);
         dispatchParameters.motionVectorScale.x       = desc->motionVectorScale.x;
         dispatchParameters.motionVectorScale.y       = desc->motionVectorScale.y;
-        dispatchParameters.reset                     = desc->reset;
-        dispatchParameters.frameTimeDelta            = desc->frameTimeDelta;
-        dispatchParameters.upscaleSize.width         = desc->upscaleSize.width;
-        dispatchParameters.upscaleSize.height        = desc->upscaleSize.height;
-        dispatchParameters.renderSize.width          = desc->renderSize.width;
-        dispatchParameters.renderSize.height         = desc->renderSize.height;
-        dispatchParameters.flags                     = ConvertDispatchFlagsNss(desc->flags);
+#if FFX_CAPTURE_ENABLED
+        dispatchParameters.reset = desc->reset || (captureActive && internal_context->controller->ShouldResetHistoryForDispatch());
+#else
+        dispatchParameters.reset     = desc->reset;
+#endif
+        dispatchParameters.frameTimeDelta     = desc->frameTimeDelta;
+        dispatchParameters.upscaleSize.width  = desc->upscaleSize.width;
+        dispatchParameters.upscaleSize.height = desc->upscaleSize.height;
+        dispatchParameters.renderSize.width   = desc->renderSize.width;
+        dispatchParameters.renderSize.height  = desc->renderSize.height;
+        dispatchParameters.flags              = ConvertDispatchFlagsNss(desc->flags);
         if (desc->flags & FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW)
         {
             dispatchParameters.debugViews    = Convert(desc->debugViews);
             dispatchParameters.debugViewMode = desc->debugViewMode;
         }
 
+#if FFX_CAPTURE_ENABLED
+        ARM_LOG_DISPATCH_TIMESTAMP_IF_ENABLED("NSS-PERF", captureActive);
+#endif
+
+#if FFX_CAPTURE_ENABLED
+        TRY2_CAPTURE(ffxNssContextDispatch(&internal_context->context, &dispatchParameters));
+#else
         TRY2(ffxNssContextDispatch(&internal_context->context, &dispatchParameters));
+#endif
+
+#if FFX_CAPTURE_ENABLED
+        if (captureActive)
+            static_cast<void>(internal_context->controller->CompleteDispatchCapture(*desc, internal_context->context));
+#endif
+
         break;
     }
     default:
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported NSS dispatch descriptor");
         return FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE;
     }
 

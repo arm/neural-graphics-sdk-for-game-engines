@@ -20,6 +20,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #pragma once
 
 #include "ffx_types.h"
@@ -60,20 +65,78 @@ typedef enum FfxErrorCodes
 
 } FfxErrorCodes;
 
+/// Returns the symbolic name of a FidelityFX error code, or "Invalid Error Code!" if unknown.
+static inline const char* ffxGetErrorCodeName(int32_t errorCode)
+{
+    switch ((uint32_t)errorCode)
+    {
+    case (uint32_t)FFX_OK:
+        return "FFX_OK";
+    case (uint32_t)FFX_ERROR_INVALID_POINTER:
+        return "FFX_ERROR_INVALID_POINTER";
+    case (uint32_t)FFX_ERROR_INVALID_ALIGNMENT:
+        return "FFX_ERROR_INVALID_ALIGNMENT";
+    case (uint32_t)FFX_ERROR_INVALID_SIZE:
+        return "FFX_ERROR_INVALID_SIZE";
+    case (uint32_t)FFX_EOF:
+        return "FFX_EOF";
+    case (uint32_t)FFX_ERROR_INVALID_PATH:
+        return "FFX_ERROR_INVALID_PATH";
+    case (uint32_t)FFX_ERROR_EOF:
+        return "FFX_ERROR_EOF";
+    case (uint32_t)FFX_ERROR_MALFORMED_DATA:
+        return "FFX_ERROR_MALFORMED_DATA";
+    case (uint32_t)FFX_ERROR_OUT_OF_MEMORY:
+        return "FFX_ERROR_OUT_OF_MEMORY";
+    case (uint32_t)FFX_ERROR_INCOMPLETE_INTERFACE:
+        return "FFX_ERROR_INCOMPLETE_INTERFACE";
+    case (uint32_t)FFX_ERROR_INVALID_ENUM:
+        return "FFX_ERROR_INVALID_ENUM";
+    case (uint32_t)FFX_ERROR_INVALID_ARGUMENT:
+        return "FFX_ERROR_INVALID_ARGUMENT";
+    case (uint32_t)FFX_ERROR_OUT_OF_RANGE:
+        return "FFX_ERROR_OUT_OF_RANGE";
+    case (uint32_t)FFX_ERROR_NULL_DEVICE:
+        return "FFX_ERROR_NULL_DEVICE";
+    case (uint32_t)FFX_ERROR_BACKEND_API_ERROR:
+        return "FFX_ERROR_BACKEND_API_ERROR";
+    case (uint32_t)FFX_ERROR_INSUFFICIENT_MEMORY:
+        return "FFX_ERROR_INSUFFICIENT_MEMORY";
+    case (uint32_t)FFX_ERROR_INVALID_VERSION:
+        return "FFX_ERROR_INVALID_VERSION";
+    default:
+        return "Invalid Error Code!";
+    }
+}
+
 /// Helper macro to return error code y from a function when a specific condition, x, is not met.
 ///
 /// @ingroup Errors
-#define FFX_RETURN_ON_ERROR(x, y) \
-    if (!(x))                     \
-    {                             \
-        return (y);               \
-    }
+#ifndef FFX_ERROR_LOG
+#define FFX_ERROR_LOG(condition, errorCode) ((void)0)
+#endif
+
+#define FFX_RETURN_ON_ERROR(x, y)                        \
+    do                                                   \
+    {                                                    \
+        if (!(x))                                        \
+        {                                                \
+            const FfxErrorCode ffxReturnErrorCode = (y); \
+            FFX_ERROR_LOG(#x, ffxReturnErrorCode);       \
+            return ffxReturnErrorCode;                   \
+        }                                                \
+    } while (0)
 
 /// Helper macro to return error code x from a function when it is not FFX_OK.
 ///
 /// @ingroup Errors
-#define FFX_VALIDATE(x)                          \
-    {                                            \
-        FfxErrorCode ret = x;                    \
-        FFX_RETURN_ON_ERROR(ret == FFX_OK, ret); \
-    }
+#define FFX_VALIDATE(x)                                 \
+    do                                                  \
+    {                                                   \
+        const FfxErrorCode ffxValidatedErrorCode = (x); \
+        if (ffxValidatedErrorCode != FFX_OK)            \
+        {                                               \
+            FFX_ERROR_LOG(#x, ffxValidatedErrorCode);   \
+            return ffxValidatedErrorCode;               \
+        }                                               \
+    } while (0)

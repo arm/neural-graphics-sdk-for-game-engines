@@ -12,3 +12,4 @@ sdk/libs/libSPIRV-Tools-android-arm.a filter=lfs diff=lfs merge=lfs -text
 sdk/libs/libSPIRV-Tools-opt-android-arm.a filter=lfs diff=lfs merge=lfs -text
 samples/third_party/manifest.tsv text eol=lf
 samples/third_party/sparse.tsv text eol=lf
+internal/docs/ThirdPartyIP.txt -text whitespace=cr-at-eol

@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #version 460
 #extension GL_EXT_shader_8bit_storage : require
@@ -15,7 +17,7 @@
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_CURRENT_INTERPOLATION_SOURCE 0
 
 // RT bindings
-#define FFX_ARM_FRAMEINTERPOLATION_BIND_RENDER_TARGET_COLOUR_P1_INTERNAL 0
+#define FFX_ARM_FRAMEINTERPOLATION_BIND_RENDER_TARGET_OF_COLOUR_P1 0
 
 // CB binding
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_CB_FRAMEINTERPOLATION 1

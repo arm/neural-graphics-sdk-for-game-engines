@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.23)
@@ -106,6 +106,9 @@ else()
 	# we need to use the glslangValidator that supports ML extensions for Vulkan
 	set(FFX_GLSLANG_EXE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/glslangValidator)
 	set(VGF_PARSER_EXECUTABLE ${CMAKE_CURRENT_SOURCE_DIR}/tools/binary_store/Model_Parser)
+	# Windows-created ZIPs do not preserve Unix executable permissions.
+	file(CHMOD "${FFX_SC_EXECUTABLE}" "${FFX_GLSLANG_EXE_PATH}" "${VGF_PARSER_EXECUTABLE}"
+		PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endif()
 
 set(FFX_INCLUDE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -118,6 +121,20 @@ set(FFX_COMPONENTS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/components)
 set(FFX_HOST_BACKENDS_PATH ${FFX_HOST_PATH}/backends)
 set(FFX_SRC_BACKENDS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/backends)
 
+add_subdirectory(third_party)
+
+add_library(ffx_logging STATIC "${FFX_SHARED_PATH}/ffx_logging.cpp" "${FFX_SHARED_PATH}/ffx_logging.h")
+target_include_directories(ffx_logging PUBLIC "${FFX_SHARED_PATH}" PRIVATE "${FFX_INCLUDE_PATH}")
+target_link_libraries(ffx_logging PRIVATE ffx::spdlog)
+if(MSVC)
+    target_compile_options(ffx_logging PRIVATE /EHs-c-)
+    target_compile_definitions(ffx_logging PRIVATE _HAS_EXCEPTIONS=0)
+else()
+    target_compile_options(ffx_logging PRIVATE -fno-exceptions)
+endif()
+set_target_properties(ffx_logging PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(ffx_logging PROPERTIES FOLDER SDK)
+
 # ------------------------------------------------------
 # Define common source groupings used by all effects
 
@@ -125,6 +142,7 @@ set(FFX_SRC_BACKENDS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/backends)
 file(GLOB FFX_SHARED_SOURCES
     "${FFX_SHARED_PATH}/*.cpp"
     "${FFX_SHARED_PATH}/*.h")
+list(REMOVE_ITEM FFX_SHARED_SOURCES "${FFX_SHARED_PATH}/ffx_logging.cpp" "${FFX_SHARED_PATH}/ffx_logging.h")
 
 set(FFX_PUBLIC_SOURCES
     "${FFX_HOST_PATH}/ffx_assert.h"
@@ -150,8 +168,18 @@ if(NOT FFX_FSR3_AS_LIBRARY)
 	message(STATUS "Creating project ${PROJ_NAME}")
 endif()
 
-# Components
-#add_subdirectory(${FFX_COMPONENTS_PATH}/opticalflow)
+# Capture is created before components so NSS can link its private hooks.
+add_library(ffx_tinyexr STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/tinyexr.cpp)
+target_include_directories(
+	ffx_tinyexr
+	PUBLIC
+		${CMAKE_CURRENT_SOURCE_DIR}/include
+		${CMAKE_CURRENT_SOURCE_DIR}/include/tinyexr
+)
+
+if(FFX_CAPTURE_ENABLED)
+	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/capture)
+endif()
 
 if(FFX_NSS OR FFX_ALL)
 	message(STATUS "Component FFX_NSS=ON")
@@ -162,6 +190,7 @@ if(FFX_FI OR FFX_ALL)
 	message(STATUS "Component FFX_FI=ON")
 	add_subdirectory(${FFX_COMPONENTS_PATH}/frameinterpolation)
 endif()
+
 
 if (FFX_OF OR FFX_ALL)
 	message(STATUS "Component FFX_OF=ON")
@@ -204,4 +233,11 @@ message(STATUS "Build tools: ${BUILD_TOOLS}")
 if(BUILD_TOOLS)
 	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tools/ffx_shader_compiler)
 	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tools/ffx_model_parser)
+	if(NOT FFX_CAPTURE_ENABLED)
+		message(STATUS "Capture tools are unavailable when FFX_CAPTURE_ENABLED=OFF.")
+	elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/capture/CMakeLists.txt")
+		add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tools/capture)
+	else()
+		message(STATUS "Capture tools are unavailable in this source package.")
+	endif()
 endif()

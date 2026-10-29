@@ -1,3 +1,22 @@
+# Public v1.1.1 Release Notes
+
+Arm® Neural Graphics SDK for Game Engines public v1.1.1 adds dataset capture for NSS and NFRU, improves the NSS implementation, updates the NFRU pipeline, and expands integration diagnostics and developer tooling.
+
+## New Features
+- Added dataset capture for NSS and NFRU. Capture can be controlled through environment variables or Android system properties, or through the programmatic API; capture support is enabled by default and can be disabled at build time.
+- Added NSS support for low-dynamic-range input, exposure textures, and optional motion-vector jitter cancellation.
+- Extended the sample dataset replayer to support NSS datasets.
+- Added experimental agent skills to help developers build and validate the SDK, run samples, and diagnose NSS/NFRU datasets during integration.
+
+## Improvements
+- Optimized the NSS implementation to improve performance and image quality.
+- Upgraded the NFRU model and frame-interpolation pipeline to version 2.0.0.
+- Improved SDK integration and debugging with expanded logging and structured runtime diagnostics, including component version and context-state messages, detailed per-frame NSS/NFRU dispatch records, CPU timing data, and optional NFRU debug-checking logs.
+- Expanded SDK documentation with a [developer user guide](docs/user_guide.md), [Vulkan compatibility matrix](docs/compatibility_matrix.md), [dataset capture guide](docs/Capture/Capture.md), [integration troubleshooting guide](docs/integration_troubleshooting.md), and [sample guide](samples/README.md). The [NSS](docs/NSS/NSS.md) and [NFRU](docs/NFRU/NFRU.md) guides were also expanded with updated integration, resource, and debugging guidance.
+
+## API Compatibility
+- The NSS and NFRU interfaces have changed, including source and ABI changes. Applications and custom backends based on v1.1.0 must be updated and rebuilt. See the [migration note](docs/migration_note.md) for the affected APIs and required changes.
+
 # Public v1.1.0 Release Notes
 Arm® Neural Graphics SDK for Game Engines public v1.1.0 introduces Neural Frame Rate Upscaling (NFRU), expands platform support, and delivers significant improvements in image quality, performance, stability, and developer tooling.
 
@@ -57,7 +76,7 @@ Windows® 11 - x86-64
 
 This is a Vulkan focused delivery so the sdk only supports the Vulkan backend.
 
-To run the SDK on devices that do not support ML extensions for Vulkan, the ML Emulation Layer for Vulkan needs to be enabled. Details can be found in [README.md](/README.md#Vulkan-emulation-layer). Please note that performance based on the Vulkan emulation layer does not represent the performance on actual devices.
+To run the SDK on devices that do not support ML extensions for Vulkan, the ML Emulation Layer for Vulkan needs to be enabled. Details can be found in the [User Guide - ML Emulation Layer for Vulkan](docs/user_guide.md#ml-emulation-layer-for-vulkan). Please note that performance based on the Vulkan emulation layer does not represent the performance on actual devices.
 
 # Documentation and resources
 

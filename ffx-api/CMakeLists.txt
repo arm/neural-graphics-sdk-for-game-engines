@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.21)
@@ -63,8 +63,8 @@ if(NOT FFX_FSR3_AS_LIBRARY)
 endif()
 
 add_compile_definitions(FFXDLL_VERSION_MAJOR=1)
-add_compile_definitions(FFXDLL_VERSION_MINOR=0)
-add_compile_definitions(FFXDLL_VERSION_PATCH=0)
+add_compile_definitions(FFXDLL_VERSION_MINOR=1)
+add_compile_definitions(FFXDLL_VERSION_PATCH=1)
 
 if (DEFINED ENV{CI_PIPELINE_ID})
 add_compile_definitions(CI_PIPELINE_ID=$ENV{CI_PIPELINE_ID})
@@ -84,10 +84,25 @@ file(GLOB private_ffx_api
 	${CMAKE_CURRENT_SOURCE_DIR}/src/validation.h
 	)
 
+if(FFX_CAPTURE_ENABLED)
+	set(private_ffx_api_capture
+		${CMAKE_CURRENT_SOURCE_DIR}/src/capture/common.h
+		${CMAKE_CURRENT_SOURCE_DIR}/src/capture/common.cpp
+		${CMAKE_CURRENT_SOURCE_DIR}/src/capture/base.h
+		${CMAKE_CURRENT_SOURCE_DIR}/src/capture/base.cpp)
+endif()
+
 if (FFX_FI OR FFX_ALL)
 	set(private_ffx_api_framegeneration
 		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_framegeneration.h
-		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_framegeneration.cpp)
+		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_framegeneration.cpp
+		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_framegeneration_diagnostics.h
+		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_framegeneration_diagnostics.cpp)
+	if(FFX_CAPTURE_ENABLED)
+		list(APPEND private_ffx_api_capture
+			${CMAKE_CURRENT_SOURCE_DIR}/src/capture/framegenerations.h
+			${CMAKE_CURRENT_SOURCE_DIR}/src/capture/framegenerations.cpp)
+	endif()
 	list(APPEND private_ffx_api ${private_ffx_api_framegeneration})
 endif()
 
@@ -95,7 +110,20 @@ if(FFX_NSS OR FFX_ALL)
 	set(private_ffx_api_nss
 		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_nss.h
 		${CMAKE_CURRENT_SOURCE_DIR}/src/ffx_provider_nss.cpp)
+	if(FFX_CAPTURE_ENABLED)
+		list(APPEND private_ffx_api_capture
+			${CMAKE_CURRENT_SOURCE_DIR}/src/capture/neuralssuperresolution.h
+			${CMAKE_CURRENT_SOURCE_DIR}/src/capture/neuralssuperresolution.cpp)
+	endif()
 	list(APPEND private_ffx_api ${private_ffx_api_nss})
+endif()
+
+if(FFX_CAPTURE_ENABLED)
+	list(APPEND private_ffx_api ${private_ffx_api_capture})
+	if(UNIT_TEST AND WIN32 AND FFX_BUILD_AS_DLL)
+		# Capture tests need private provider helpers that are not DLL exports.
+		target_sources(sdk_unit_test PRIVATE ${private_ffx_api_capture})
+	endif()
 endif()
 
 file(GLOB public_ffx_api
@@ -122,12 +150,28 @@ endif()
 # We might consider add graphics api when we start supporting other than vulkan(for example dx12)
 if(FFX_BUILD_AS_DLL)
 	add_library(${SDK_LIB_NAME} SHARED ${private_ffx_api} ${private_ffx_api_backend_vk} ${public_ffx_api} ${public_ffx_api_backend_vk})
-	# strip symbols for release build to reduce the library size.
-	target_link_options(
-		${SDK_LIB_NAME}
-		PRIVATE
-		$<$<CONFIG:Release>:LINKER:--strip-all>
-	)
+	# Only check OS name for android.
+	if(FFX_OS_NAME STREQUAL "android")
+		set_target_properties(${SDK_LIB_NAME} PROPERTIES
+			OUTPUT_NAME "${SDK_LIB_NAME}"
+			DEBUG_POSTFIX ""
+			RELWITHDEBINFO_POSTFIX ""
+			LIBRARY_OUTPUT_DIRECTORY "${CMAKE_HOME_DIRECTORY}/bin"
+			LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_HOME_DIRECTORY}/bin"
+			LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_HOME_DIRECTORY}/bin"
+			LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_HOME_DIRECTORY}/bin"
+			RUNTIME_OUTPUT_DIRECTORY "${CMAKE_HOME_DIRECTORY}/bin"
+			RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_HOME_DIRECTORY}/bin"
+			RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_HOME_DIRECTORY}/bin"
+			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_HOME_DIRECTORY}/bin"
+			ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_HOME_DIRECTORY}/bin"
+			ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_HOME_DIRECTORY}/bin"
+			ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_HOME_DIRECTORY}/bin"
+			ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_HOME_DIRECTORY}/bin"
+			LINK_FLAGS "-Wl,-soname,lib${SDK_LIB_NAME}.so"
+		)
+	endif()
+
 	if(WIN32)
 		set_target_properties(${SDK_LIB_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
 	endif()
@@ -154,12 +198,19 @@ if (FFX_GRAPHICS_API STREQUAL "vk")
 endif()
 
 target_include_directories(${SDK_LIB_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/include)
-
-# FSR dependency, must be built before using BuildFidelityFXSDK.bat
+target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src)
+target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/shared)
+target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/components/frameinterpolation)
+target_include_directories(${SDK_LIB_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/components/opticalflow)
+target_compile_definitions(${SDK_LIB_NAME}
+    PRIVATE
+        FFX_CAPTURE_ENABLED=$<BOOL:${FFX_CAPTURE_ENABLED}>)
 
 set(FFX_AUTO_COMPILE_SHADERS ON)
 add_subdirectory(../sdk sdk)
+target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_logging)
 
 if(FFX_BUILD_AS_DLL AND FFX_GRAPHICS_API STREQUAL "vk" AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR MINGW))
 	target_link_options(${SDK_LIB_NAME} PRIVATE
@@ -173,17 +224,28 @@ endif()
 
 if(FFX_FI OR FFX_ALL)
 	target_compile_definitions(${SDK_LIB_NAME} PRIVATE FFX_FI)
-    target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_frameinterpolation_${FFX_PLATFORM_NAME})
+	target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_frameinterpolation_${FFX_PLATFORM_NAME})
+	if(FFX_CAPTURE_ENABLED)
+		target_link_libraries(${SDK_LIB_NAME} PRIVATE arm_capture_${FFX_PLATFORM_NAME})
+	endif()
 endif()
 
 if(FFX_NSS OR FFX_ALL)
 	target_compile_definitions(${SDK_LIB_NAME} PRIVATE FFX_NSS)
-    target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_nss_${FFX_PLATFORM_NAME})
+	target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_nss_${FFX_PLATFORM_NAME})
+	if(FFX_CAPTURE_ENABLED)
+		target_link_libraries(${SDK_LIB_NAME} PRIVATE arm_capture_${FFX_PLATFORM_NAME})
+	endif()
 endif()
+
 
 if(FFX_OF OR FFX_ALL)
 	target_compile_definitions(${SDK_LIB_NAME} PRIVATE FFX_OF)
 	target_link_libraries(${SDK_LIB_NAME} PRIVATE ffx_opticalflow_${FFX_PLATFORM_NAME})
+endif()
+
+if(UNIT_TEST)
+	target_compile_definitions(${SDK_LIB_NAME} PRIVATE FFX_UNIT_TEST)
 endif()
 
 if (FFX_GRAPHICS_API STREQUAL vk)

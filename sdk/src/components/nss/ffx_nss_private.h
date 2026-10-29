@@ -18,10 +18,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
+#include <cstddef>
+#include <cstdint>
 #include "FidelityFX/gpu/nss/ffx_nss_resources.h"
 
 enum NssScalePresetMode
@@ -46,19 +50,22 @@ static constexpr uint32_t NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT = 10;
 /// @ingroup ffxNss
 typedef enum NssShaderPermutationOptions : uint32_t
 {
-    NSS_SHADER_PERMUTATION_QUANTIZED             = (1 << 0),
-    NSS_SHADER_PERMUTATION_REVERSE_Z             = (1 << 1),
-    NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC      = (1 << 2),
-    NSS_SHADER_PERMUTATION_STATIC                = (1 << 3),
-    NSS_SHADER_PERMUTATION_ALLOW_16BIT           = (1 << 4),
-    NSS_SHADER_PERMUTATION_SCALE_PRESET_X2       = (1 << 5),
-    NSS_SHADER_PERMUTATION_MANAGE_HISTORY        = (1 << 7),
-    NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT  = (1 << 8),
-    NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT = (1 << 9),
+    NSS_SHADER_PERMUTATION_QUANTIZED            = (1 << 0),
+    NSS_SHADER_PERMUTATION_REVERSE_Z            = (1 << 1),
+    NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC     = (1 << 2),
+    NSS_SHADER_PERMUTATION_STATIC               = (1 << 3),
+    NSS_SHADER_PERMUTATION_DISABLE_16BIT        = (1 << 4),
+    NSS_SHADER_PERMUTATION_SCALE_PRESET_X2      = (1 << 5),
+    NSS_SHADER_PERMUTATION_EXPOSURE_TEXTURE     = (1 << 6),
+    NSS_SHADER_PERMUTATION_MANAGE_HISTORY       = (1 << 7),
+    NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE  = (1 << 8),  ///< Select the compute permutation; unset selects fragment.
+    NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE = (1 << 9),  ///< Select the compute permutation; unset selects fragment.
     // Bits 10-11: 2-bit shader quality mode field
     NSS_SHADER_PERMUTATION_QUALITY_MODE_MASK       = (NSS_SHADER_QUALITY_MODE_MASK << NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT),
     NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR  = (1 << 12),
     NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR = (1 << 13),
+    NSS_SHADER_PERMUTATION_LDR_MODE                = (1 << 14),
+    NSS_SHADER_PERMUTATION_JITTER_MOTION_VECTORS   = (1 << 15),
 } NssShaderPermutationOptions;
 
 /// Debug view display modes for the NSS debug view pass.
@@ -89,7 +96,7 @@ typedef enum NssDebugViewMode : uint32_t
 /// Constants for NSS dispatches.
 ///
 /// These constants are updated each frame and passed to the NSS preprocess
-/// and postprocess compute shaders.
+/// and postprocess shaders.
 ///
 /// @ingroup ffxNss
 typedef struct NssConstants
@@ -127,9 +134,34 @@ typedef struct NssConstants
 
     FfxUInt32x2 _ReducedInputModulo;  ///< Reduced output/input denominator per axis, used by dynamic LUT generation.
     FfxUInt32x2 _LutOffset;           ///< Jittered offset inside the modulo tile. .x = offset.x, .y = offset.y
+
+    FfxFloat32x2 _JitterCancellation;  ///< Current minus previous sample-position jitter, in render pixels.
+    FfxUInt32x2  _JitterPadding;       ///< Complete the std140 tail block.
 } NssConstants;
 
+static_assert(offsetof(NssConstants, _JitterCancellation) == 208, "NSS host/shader cancellation offset must match.");
+static_assert(sizeof(NssConstants) == 224, "NSS host/shader constant buffer size must match.");
+
+void UpdateNssJitterConstants(NssConstants& constants, const FfxNssDispatchDescription& params, bool resetHistory, bool cancelMotionJitter);
+
 struct FfxPipelineState;
+struct NssJitterAnalyzerState;
+
+/// Repeated dispatch error key.
+typedef struct NssDispatchErrorState
+{
+    FfxErrorCode code;    ///< Error code.
+    const char*  reason;  ///< Static reason string.
+    const char*  stage;   ///< Static stage string.
+} NssDispatchErrorState;
+
+/// Per-context diagnostics.
+typedef struct NssDiagnosticsState
+{
+    uint64_t              contextId;   ///< Context log ID.
+    uint64_t              dispatchId;  ///< Dispatch log ID.
+    NssDispatchErrorState lastError;   ///< Last reported error.
+} NssDiagnosticsState;
 
 /// FfxNssContext_Private
 /// The private implementation of the NSS context.
@@ -139,7 +171,11 @@ typedef struct FfxNssContext_Private
 {
     FfxNssContextDescription contextDescription;  ///< The description used to create this context
     FfxUInt32                effectContextId;
-    NssConstants             constants;  ///< The constants used for the current dispatch. Setup and stored in host side.
+    NssDiagnosticsState      diagnostics;                ///< Diagnostics.
+    bool                     unsupportedDevice;          ///< Unsupported capability detected.
+    bool                     backendContextCreated;      ///< Backend context created.
+    FfxResourceDescription   managedHistoryDescription;  ///< Managed history resource.
+    NssConstants             constants;                  ///< The constants used for the current dispatch. Setup and stored in host side.
     FfxDevice                device;
     FfxPipelineState         pipelineNssDepthScatter;                          ///< The pipeline state for the NSS depth scatter pass.
     FfxPipelineState         pipelineNssDisocclusionMask;                      ///< The pipeline state for the NSS disocclusion mask pass.
@@ -153,16 +189,18 @@ typedef struct FfxNssContext_Private
     FfxResourceInternal      uavResources[FFX_NSS_RESOURCE_IDENTIFIER_COUNT];  ///< UAV resource table.
     FfxConstantBuffer        rootConstant;
 
-    bool            firstExecution;
-    uint32_t        resourceFrameIndex;
-    uint32_t        pipelineFlags;
-    FfxDimensions2D depthScatterSize;
-    FfxDimensions2D processSize;
-    FfxDimensions2D dataGraphSize;
-    FfxDimensions2D kpnDimension;
-    FfxDimensions2D offsetLutSize;
-    FfxDimensions2D reducedFractionLrSize;
-    FfxDimensions2D reducedFractionHrSize;
-    bool            useDynamicOffsetLut;
-    bool            useDisocclusionMaskPass;
+    bool                    firstExecution;
+    bool                    requiresRecreation;  ///< A backend dispatch failed after work began.
+    uint32_t                resourceFrameIndex;
+    uint32_t                pipelineFlags;
+    FfxDimensions2D         depthScatterSize;
+    FfxDimensions2D         processSize;
+    FfxDimensions2D         dataGraphSize;
+    FfxDimensions2D         kpnDimension;
+    FfxDimensions2D         offsetLutSize;
+    FfxDimensions2D         reducedFractionLrSize;
+    FfxDimensions2D         reducedFractionHrSize;
+    bool                    useDynamicOffsetLut;
+    bool                    useDisocclusionMaskPass;
+    NssJitterAnalyzerState* jitterAnalyzer;
 } FfxNssContext_Private;

@@ -59,7 +59,12 @@ ExitCode Platform::initialize(const std::vector<Plugin *> &plugins_)
 	logger->set_level(spdlog::level::info);
 #endif
 
+#ifdef PLATFORM__ANDROID
+	// Android logcat already supplies the severity letter (I/W/E).
+	logger->set_pattern("%v");
+#else
 	logger->set_pattern(LOGGER_FORMAT);
+#endif
 	spdlog::set_default_logger(logger);
 
 	LOGI("Logger initialized");

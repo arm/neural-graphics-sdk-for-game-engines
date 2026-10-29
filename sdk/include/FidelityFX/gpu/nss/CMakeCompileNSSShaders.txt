@@ -40,7 +40,10 @@ if(WIN32)
         -DRESAMPLE_BICUBIC={0,1}
         -DSCALE_PRESET_MODE={0,1}
         -DMANAGE_HISTORY={0,1}
+        -DUSE_EXPOSURE_TEXTURE={0,1}
+        -DNSS_JITTER_MOTION_VECTORS={0,1}
         -DNSS_SHADER_QUALITY_MODE={0,1,2}
+        -DNSS_LDR_MODE={0,1}
         -DNSS_SUPPORT_TENSOR={0,1})
 
 else()
@@ -51,7 +54,10 @@ else()
         -DRESAMPLE_BICUBIC="{0,1}"
         -DSCALE_PRESET_MODE="{0,1}"
         -DMANAGE_HISTORY="{0,1}"
+        -DUSE_EXPOSURE_TEXTURE="{0,1}"
+        -DNSS_JITTER_MOTION_VECTORS="{0,1}"
         -DNSS_SHADER_QUALITY_MODE="{0,1,2}"
+        -DNSS_LDR_MODE="{0,1}"
         -DNSS_SUPPORT_TENSOR="{0,1}"
         )
 endif()

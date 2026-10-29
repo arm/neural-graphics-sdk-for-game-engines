@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #define FFX_CPU
 #include <FidelityFX/host/ffx_util.h>
@@ -29,21 +31,24 @@
 #include "frameinterpolation/ffx_frameinterpolation_private.h"
 
 // Data Graph
-#include <nfru_v1_int8.h>
+#include <nfru_v2_0_0_int8.h>
 
 // Normal permutations
 #include <ffx_frameinterpolation_00_init_warp_pass_permutations.h>
 #include <ffx_frameinterpolation_01_downsample_of_colour_pass_fs_permutations.h>
+#include <ffx_frameinterpolation_02_downsample_all_input_pass_fs_permutations.h>
+#include <ffx_frameinterpolation_03_downsample_colour_pass_fs_permutations.h>
 #include <ffx_frameinterpolation_10_warp_flow_pass_permutations.h>
 #include <ffx_frameinterpolation_10_warp_flow_pass_fs_permutations.h>
 #include <ffx_frameinterpolation_11_warp_flow_tm1_pass_permutations.h>
 #include <ffx_frameinterpolation_11_warp_flow_tm1_pass_fs_permutations.h>
-#include <ffx_frameinterpolation_20_fill_holes_pass_permutations.h>
-#include <ffx_frameinterpolation_20_fill_holes_pass_fs_permutations.h>
 #include <ffx_frameinterpolation_21_fill_holes_tm1_pass_permutations.h>
 #include <ffx_frameinterpolation_21_fill_holes_tm1_pass_fs_permutations.h>
 #include <ffx_frameinterpolation_30_preprocess_pass_permutations.h>
 #include <ffx_frameinterpolation_30_preprocess_pass_fs_permutations.h>
+#include <ffx_frameinterpolation_31_downsample_inpaint_seed_pass_permutations.h>
+#include <ffx_frameinterpolation_31_downsample_inpaint_mip_pass_permutations.h>
+#include <ffx_frameinterpolation_50_inpaint_pass_permutations.h>
 #include <ffx_frameinterpolation_50_postprocess_pass_permutations.h>
 #include <ffx_frameinterpolation_50_postprocess_pass_fs_permutations.h>
 #include <ffx_frameinterpolation_debug_view_pass_permutations.h>
@@ -53,16 +58,19 @@
 // 16bit permutations
 #include <ffx_frameinterpolation_00_init_warp_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_01_downsample_of_colour_pass_fs_16bit_permutations.h>
+#include <ffx_frameinterpolation_02_downsample_all_input_pass_fs_16bit_permutations.h>
+#include <ffx_frameinterpolation_03_downsample_colour_pass_fs_16bit_permutations.h>
 #include <ffx_frameinterpolation_10_warp_flow_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_10_warp_flow_pass_fs_16bit_permutations.h>
 #include <ffx_frameinterpolation_11_warp_flow_tm1_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_11_warp_flow_tm1_pass_fs_16bit_permutations.h>
-#include <ffx_frameinterpolation_20_fill_holes_pass_16bit_permutations.h>
-#include <ffx_frameinterpolation_20_fill_holes_pass_fs_16bit_permutations.h>
 #include <ffx_frameinterpolation_21_fill_holes_tm1_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_21_fill_holes_tm1_pass_fs_16bit_permutations.h>
 #include <ffx_frameinterpolation_30_preprocess_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_30_preprocess_pass_fs_16bit_permutations.h>
+#include <ffx_frameinterpolation_31_downsample_inpaint_seed_pass_16bit_permutations.h>
+#include <ffx_frameinterpolation_31_downsample_inpaint_mip_pass_16bit_permutations.h>
+#include <ffx_frameinterpolation_50_inpaint_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_50_postprocess_pass_16bit_permutations.h>
 #include <ffx_frameinterpolation_50_postprocess_pass_fs_16bit_permutations.h>
 #include <ffx_frameinterpolation_debug_view_pass_16bit_permutations.h>
@@ -119,15 +127,48 @@ static FfxShaderBlob armFrameInterpolationGetDownsampleOfColourPassPermutationBl
     }
 }
 
+static FfxShaderBlob armFrameInterpolationGetDownsampleAllInputPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_frameinterpolation_02_downsample_all_input_pass_fs_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_02_downsample_all_input_pass_fs_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_02_downsample_all_input_pass_fs_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_02_downsample_all_input_pass_fs_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_02_downsample_all_input_pass_fs_PermutationInfo, tableIndex);
+    }
+}
+
+static FfxShaderBlob armFrameInterpolationGetDownsampleColourPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_frameinterpolation_03_downsample_colour_pass_fs_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_03_downsample_colour_pass_fs_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_03_downsample_colour_pass_fs_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_03_downsample_colour_pass_fs_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_03_downsample_colour_pass_fs_PermutationInfo, tableIndex);
+    }
+}
+
 // Warp motion TP1
 static FfxShaderBlob armFrameInterpolationGetWarpFlowPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
     ffx_frameinterpolation_10_warp_flow_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_FRAGMENT;
-    if (useFragmentJob)
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_COMPUTE) != 0;
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -159,9 +200,8 @@ static FfxShaderBlob armFrameInterpolationGetWarpFlowTM1PassPermutationBlobByInd
     ffx_frameinterpolation_11_warp_flow_tm1_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_FRAGMENT;
-    if (useFragmentJob)
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_WARP_COMPUTE) != 0;
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -187,49 +227,14 @@ static FfxShaderBlob armFrameInterpolationGetWarpFlowTM1PassPermutationBlobByInd
     }
 }
 
-// Fill motion hole TP1
-static FfxShaderBlob armFrameInterpolationGetFillHolesPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
-{
-    ffx_frameinterpolation_20_fill_holes_pass_PermutationKey key;
-    POPULATE_PERMUTATION_KEY(permutationOptions, key);
-
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_FILL_HOLES_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_FILL_HOLES_FRAGMENT;
-    if (useFragmentJob)
-    {
-        if (is16bit)
-        {
-            const int32_t tableIndex = g_ffx_frameinterpolation_20_fill_holes_pass_fs_16bit_IndirectionTable[key.index];
-            return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_20_fill_holes_pass_fs_16bit_PermutationInfo, tableIndex);
-        }
-        else
-        {
-            const int32_t tableIndex = g_ffx_frameinterpolation_20_fill_holes_pass_fs_IndirectionTable[key.index];
-            return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_20_fill_holes_pass_fs_PermutationInfo, tableIndex);
-        }
-    }
-
-    if (is16bit)
-    {
-        const int32_t tableIndex = g_ffx_frameinterpolation_20_fill_holes_pass_16bit_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_20_fill_holes_pass_16bit_PermutationInfo, tableIndex);
-    }
-    else
-    {
-        const int32_t tableIndex = g_ffx_frameinterpolation_20_fill_holes_pass_IndirectionTable[key.index];
-        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_20_fill_holes_pass_PermutationInfo, tableIndex);
-    }
-}
-
 // Fill flow TM1
 static FfxShaderBlob armFrameInterpolationGetFillHolesTM1PassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
     ffx_frameinterpolation_21_fill_holes_tm1_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_FILL_HOLES_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_FILL_HOLES_FRAGMENT;
-    if (useFragmentJob)
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_FILL_HOLES_COMPUTE) != 0;
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -260,12 +265,11 @@ static FfxShaderBlob armFrameInterpolationGetPreprocessPassPermutationBlobByInde
     ffx_frameinterpolation_30_preprocess_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT;
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) != 0;
     const auto supportTensorBit =
-        useFragmentJob ? FRAMEINTERPOLATION_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : FRAMEINTERPOLATION_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+        useComputeJob ? FRAMEINTERPOLATION_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : FRAMEINTERPOLATION_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
     key.FFX_ARM_FRAMEINTERPOLATION_OPTION_SUPPORT_TENSOR = FFX_CONTAINS_FLAG(permutationOptions, supportTensorBit);
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -291,14 +295,64 @@ static FfxShaderBlob armFrameInterpolationGetPreprocessPassPermutationBlobByInde
     }
 }
 
+static FfxShaderBlob armFrameInterpolationGetInpaintPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_frameinterpolation_50_inpaint_pass_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_50_inpaint_pass_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_50_inpaint_pass_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_50_inpaint_pass_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_50_inpaint_pass_PermutationInfo, tableIndex);
+    }
+}
+
+static FfxShaderBlob armFrameInterpolationGetDownsampleInpaintSeedPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_frameinterpolation_31_downsample_inpaint_seed_pass_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_31_downsample_inpaint_seed_pass_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_31_downsample_inpaint_seed_pass_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_31_downsample_inpaint_seed_pass_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_31_downsample_inpaint_seed_pass_PermutationInfo, tableIndex);
+    }
+}
+
+static FfxShaderBlob armFrameInterpolationGetDownsampleInpaintMipPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
+{
+    ffx_frameinterpolation_31_downsample_inpaint_mip_pass_PermutationKey key;
+    POPULATE_PERMUTATION_KEY(permutationOptions, key);
+
+    if (is16bit)
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_31_downsample_inpaint_mip_pass_16bit_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_31_downsample_inpaint_mip_pass_16bit_PermutationInfo, tableIndex);
+    }
+    else
+    {
+        const int32_t tableIndex = g_ffx_frameinterpolation_31_downsample_inpaint_mip_pass_IndirectionTable[key.index];
+        return POPULATE_SHADER_BLOB_FFX(g_ffx_frameinterpolation_31_downsample_inpaint_mip_pass_PermutationInfo, tableIndex);
+    }
+}
+
 static FfxShaderBlob armFrameInterpolationGetPostprocessPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
     ffx_frameinterpolation_50_postprocess_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_POSTPROCESS_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_POSTPROCESS_FRAGMENT;
-    if (useFragmentJob)
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_POSTPROCESS_COMPUTE) != 0;
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -329,12 +383,11 @@ static FfxShaderBlob armFrameInterpolationGetDebugViewPassPermutationBlobByIndex
     ffx_frameinterpolation_debug_view_pass_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob =
-        (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_DEBUG_VIEW_FRAGMENT) == FRAMEINTERPOLATION_SHADER_PERMUTATION_DEBUG_VIEW_FRAGMENT;
+    const bool useComputeJob = (permutationOptions & FRAMEINTERPOLATION_SHADER_PERMUTATION_DEBUG_VIEW_COMPUTE) != 0;
     const auto supportTensorBit =
-        useFragmentJob ? FRAMEINTERPOLATION_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : FRAMEINTERPOLATION_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+        useComputeJob ? FRAMEINTERPOLATION_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : FRAMEINTERPOLATION_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
     key.FFX_ARM_FRAMEINTERPOLATION_OPTION_SUPPORT_TENSOR = FFX_CONTAINS_FLAG(permutationOptions, supportTensorBit);
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -404,16 +457,23 @@ FfxErrorCode frameInterpolationGetPermutationBlobByIndex(
         return FFX_OK;
     }
 
-    case FFX_FRAMEINTERPOLATION_PASS_WARP_MV_TP1:
+    case FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_ALL_INPUT:
     {
-        FfxShaderBlob blob = armFrameInterpolationGetWarpFlowPassPermutationBlobByIndex(permutationOptions, is16bit);
+        FfxShaderBlob blob = armFrameInterpolationGetDownsampleAllInputPassPermutationBlobByIndex(permutationOptions, is16bit);
         memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
         return FFX_OK;
     }
 
-    case FFX_FRAMEINTERPOLATION_PASS_FILL_HOLES_TP1:
+    case FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_COLOUR:
     {
-        FfxShaderBlob blob = armFrameInterpolationGetFillHolesPassPermutationBlobByIndex(permutationOptions, is16bit);
+        FfxShaderBlob blob = armFrameInterpolationGetDownsampleColourPassPermutationBlobByIndex(permutationOptions, is16bit);
+        memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+        return FFX_OK;
+    }
+
+    case FFX_FRAMEINTERPOLATION_PASS_WARP_MV_TP1:
+    {
+        FfxShaderBlob blob = armFrameInterpolationGetWarpFlowPassPermutationBlobByIndex(permutationOptions, is16bit);
         memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
         return FFX_OK;
     }
@@ -439,6 +499,27 @@ FfxErrorCode frameInterpolationGetPermutationBlobByIndex(
         return FFX_OK;
     }
 
+    case FFX_FRAMEINTERPOLATION_PASS_INPAINT:
+    {
+        FfxShaderBlob blob = armFrameInterpolationGetInpaintPassPermutationBlobByIndex(permutationOptions, is16bit);
+        memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+        return FFX_OK;
+    }
+
+    case FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_INPAINT_SEED:
+    {
+        FfxShaderBlob blob = armFrameInterpolationGetDownsampleInpaintSeedPassPermutationBlobByIndex(permutationOptions, is16bit);
+        memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+        return FFX_OK;
+    }
+
+    case FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_INPAINT_MIP:
+    {
+        FfxShaderBlob blob = armFrameInterpolationGetDownsampleInpaintMipPassPermutationBlobByIndex(permutationOptions, is16bit);
+        memcpy(outBlob, &blob, sizeof(FfxShaderBlob));
+        return FFX_OK;
+    }
+
     case FFX_FRAMEINTERPOLATION_PASS_POSTPROCESS:
     {
         FfxShaderBlob blob = armFrameInterpolationGetPostprocessPassPermutationBlobByIndex(permutationOptions, is16bit);
@@ -447,7 +528,7 @@ FfxErrorCode frameInterpolationGetPermutationBlobByIndex(
     }
     case FFX_FRAMEINTERPOLATION_PASS_NFRU_INTERPOLATION:
     {
-        memcpy(outDataGraphBlob, &g_nfru_v1_int8_Info, sizeof(FfxDataGraphBlob));
+        memcpy(outDataGraphBlob, &g_nfru_v2_0_0_int8_Info, sizeof(FfxDataGraphBlob));
         return FFX_OK;
     }
     case FFX_FRAMEINTERPOLATION_PASS_DEBUG_VIEW:

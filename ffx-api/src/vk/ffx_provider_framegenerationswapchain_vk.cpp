@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "ffx_provider_framegenerationswapchain_vk.h"
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
@@ -30,6 +32,11 @@
 #include <FidelityFX/host/backends/vk/vk_wrapper.h>
 
 #include <stdlib.h>
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "FISwapchain";
+}
 
 struct InternalFgScContext
 {
@@ -167,6 +174,7 @@ ffxReturnCode_t ffxProvider_FrameGenerationSwapChain_VK::CreateContext(ffxContex
     }
     else
     {
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported frame-generation swapchain create descriptor");
         return FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE;
     }
 }
@@ -195,7 +203,7 @@ ffxReturnCode_t ffxProvider_FrameGenerationSwapChain_VK::DestroyContext(ffxConte
         internal_context->fiSwapChain = VK_NULL_HANDLE;
     }
 
-    alloc.dealloc(internal_context);
+    alloc.dealloc(internal_context, sizeof(InternalFgScContext));
 
     return FFX_API_RETURN_OK;
 }
@@ -215,6 +223,7 @@ ffxReturnCode_t ffxProvider_FrameGenerationSwapChain_VK::Configure(ffxContext* c
     }
     else
     {
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported frame-generation swapchain configure descriptor");
         return FFX_API_RETURN_ERROR_PARAMETER;
     }
 }
@@ -254,6 +263,7 @@ ffxReturnCode_t ffxProvider_FrameGenerationSwapChain_VK::Query(ffxContext* conte
     }
     else
     {
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported frame-generation swapchain query descriptor");
         return FFX_API_RETURN_ERROR_PARAMETER;
     }
 }
@@ -269,6 +279,7 @@ ffxReturnCode_t ffxProvider_FrameGenerationSwapChain_VK::Dispatch(ffxContext* co
     }
     else
     {
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "unsupported frame-generation swapchain dispatch descriptor");
         return FFX_API_RETURN_ERROR;
     }
 }

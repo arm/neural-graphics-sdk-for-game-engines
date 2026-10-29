@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #version 460
 #extension GL_EXT_samplerless_texture_functions : require
@@ -27,6 +29,10 @@
 #define NSS_BIND_SRV_FEEDBACK_TENSOR                    4    // FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR
 #define NSS_BIND_SRV_NEAREST_DEPTH_COORD                5    // FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD
 #define NSS_BIND_SRV_OFFSET_LUT                         6   // FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT
+
+#if USE_EXPOSURE_TEXTURE
+#define NSS_BIND_SRV_INPUT_EXPOSURE                     10   // FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE
+#endif
 
 //-----------------------------------------------------------------------------
 // Output: UAV bindings

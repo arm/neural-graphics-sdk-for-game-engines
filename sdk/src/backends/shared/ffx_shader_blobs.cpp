@@ -18,10 +18,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "ffx_shader_blobs.h"
+
+#include "ffx_logging.h"
 
 #if defined(FFX_FI) || defined(FFX_ALL)
 #include "blob_accessors/ffx_frameinterpolation_shaderblobs.h"
@@ -36,6 +40,11 @@
 #endif  // #if defined(FFX_OF) || defined(FFX_ALL)
 
 #include <string.h>  // for memset
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "ShaderBlobs";
+}
 
 FfxErrorCode ffxGetPermutationBlobByIndex(
     FfxEffect effectId, FfxPass passId, uint32_t permutationOptions, FfxShaderBlob* outBlob, FfxShaderBlob* outVertBlob, FfxDataGraphBlob* outDataGraphBlob)
@@ -96,5 +105,5 @@ FfxErrorCode ffxIsWave64(FfxEffect effectId, uint32_t permutationOptions, bool& 
         break;
     }
 
-    return FFX_ERROR_BACKEND_API_ERROR;
+    return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "the requested effect or shader permutation is not implemented");
 }

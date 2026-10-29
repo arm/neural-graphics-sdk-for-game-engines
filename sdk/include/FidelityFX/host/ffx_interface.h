@@ -18,8 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -57,7 +59,7 @@ FFX_FORWARD_DECLARE(FfxInterface);
 /// FidelityFX SDK patch version.
 ///
 /// @ingroup FfxInterface
-#define FFX_SDK_VERSION_PATCH (2)
+#define FFX_SDK_VERSION_PATCH (1)
 
 /// Macro to pack a FidelityFX SDK version id together.
 ///
@@ -99,6 +101,11 @@ typedef FfxVersionNumber (*FfxGetSDKVersionFunc)(FfxInterface* backendInterface)
 ///
 /// @ingroup FfxInterface
 typedef FfxErrorCode (*FfxGetEffectGpuMemoryUsageFunc)(FfxInterface* backendInterface, FfxUInt32 effectContextId, FfxEffectMemoryUsage* outVramUsage);
+
+/// Get GPU memory usage shared by all effect contexts of a backend interface.
+///
+/// @ingroup FfxInterface
+typedef FfxErrorCode (*FfxGetBackendGpuMemoryUsageFunc)(FfxInterface* backendInterface, FfxEffectMemoryUsage* outVramUsage);
 
 /// Create and initialize the backend context.
 ///
@@ -509,11 +516,13 @@ typedef void (*FfxRegisterConstantBufferAllocatorFunc)(FfxInterface* backendInte
 /// This callback is invoked by the backend to print diagnostic, warning, or error messages.
 /// Implementations should handle message display according to the message type.
 ///
+/// A typedef for the callback function for SDK and backend logging.
+///
 /// @param [in] type                                 The message type (e.g., error, warning, info).
 /// @param [in] message                              A pointer to the null-terminated message string.
 ///
 /// @ingroup FfxInterface
-typedef void (*FfxBackendMessage)(uint32_t type, const char* message);
+typedef void (*FfxLogMessageCallback)(FfxMsgType type, const char* message);
 
 /// Register a message callback function with the backend.
 ///
@@ -530,7 +539,7 @@ typedef void (*FfxBackendMessage)(uint32_t type, const char* message);
 /// Anything else                                   The operation failed.
 ///
 /// @ingroup FfxInterface
-typedef FfxErrorCode (*FfxSetMessageCallback)(FfxInterface* backendInterface, FfxBackendMessage ffxMessageCallback);
+typedef FfxErrorCode (*FfxSetMessageCallback)(FfxInterface* backendInterface, FfxLogMessageCallback ffxMessageCallback);
 
 /// A structure encapsulating the interface between the core implementation of
 /// the FfxInterface and any graphics API that it should ultimately call.
@@ -583,6 +592,7 @@ typedef struct FfxInterface
     // FidelityFX SDK 1.0 callback handles
     FfxGetSDKVersionFunc             fpGetSDKVersion;                ///< A callback function to query the SDK version.
     FfxGetEffectGpuMemoryUsageFunc   fpGetEffectGpuMemoryUsage;      ///< A callback function to query effect Gpu memory usage
+    FfxGetBackendGpuMemoryUsageFunc  fpGetBackendGpuMemoryUsage;     ///< A callback function to query backend-global Gpu memory usage.
     FfxCreateBackendContextFunc      fpCreateBackendContext;         ///< A callback function to create and initialize the backend context.
     FfxGetDeviceCapabilitiesFunc     fpGetDeviceCapabilities;        ///< A callback function to query device capabilites.
     FfxDestroyBackendContextFunc     fpDestroyBackendContext;        ///< A callback function to destroy the backendcontext. This also dereferences the device.
@@ -611,7 +621,7 @@ typedef struct FfxInterface
     FfxRegisterConstantBufferAllocatorFunc
         fpRegisterConstantBufferAllocator;  ///< A callback function to register a custom <b>Thread Safe</b> constant buffer allocator.
 
-    FfxBackendMessage fpMessage;  ///< A function pointer to store the print message callback.
+    FfxLogMessageCallback fpMessage;  ///< A function pointer to store the print message callback.
 
     void*     scratchBuffer;      ///< A preallocated buffer for memory utilized internally by the backend.
     size_t    scratchBufferSize;  ///< Size of the buffer pointed to by <c><i>scratchBuffer</i></c>.

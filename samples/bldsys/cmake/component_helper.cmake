@@ -34,7 +34,7 @@ function(vkb__register_component)
     endif()
 
     set(TARGET "vkb__${TARGET_NAME}")
-    set(TARGET_FOLDER "components")
+    set(TARGET_FOLDER "Samples/Components")
 
     set(LINKAGE "UNKNOWN") # Used to determine whether to create a static or interface library
 

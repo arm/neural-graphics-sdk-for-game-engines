@@ -54,6 +54,7 @@ if (FFX_FI OR FFX_ALL)
 
 	target_include_directories(ffx_frameinterpolation_${FFX_PLATFORM_NAME} PUBLIC ${FFX_INCLUDE_PATH})
 	target_include_directories(ffx_frameinterpolation_${FFX_PLATFORM_NAME} PUBLIC ${FFX_SHARED_PATH})
+	target_link_libraries(ffx_frameinterpolation_${FFX_PLATFORM_NAME} PRIVATE ffx_logging)
 
 	set_source_files_properties(${SHADERS} PROPERTIES HEADER_FILE_ONLY TRUE)
 	set_target_properties(ffx_frameinterpolation_${FFX_PLATFORM_NAME} PROPERTIES FOLDER Components)

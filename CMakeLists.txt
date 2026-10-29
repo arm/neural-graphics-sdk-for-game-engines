@@ -20,12 +20,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.21)
 message(STATUS "Start configure neural-graphics-sdk-for-game-engines")
 project (neural_graphics_sdk)
+
+include(sdk/cmake/release_build.cmake)
 
 # FFX_GRAPHICS_API is the graphics API: VK, DX12, etc.
 # FFX_OS_NAME is the operation system name: LINUX, WINDOWS, ANDROID, etc.
@@ -129,6 +131,13 @@ if(FFX_DEBUG)
     add_compile_definitions(FFX_DEBUG)
 endif()
 
+option(FFX_ENABLE_CPU_HEAP_TRACKING "Track CPU heap allocations owned by effect contexts" OFF)
+if(FFX_ENABLE_CPU_HEAP_TRACKING)
+    message(STATUS "FFX_ENABLE_CPU_HEAP_TRACKING=ON")
+    add_compile_definitions(FFX_ENABLE_CPU_HEAP_TRACKING)
+else()
+    message(STATUS "FFX_ENABLE_CPU_HEAP_TRACKING=OFF")
+endif()
 if(FFX_FSR3_AS_LIBRARY)
     message(STATUS "Building FSR3 as a third-party library")
 endif()
@@ -153,10 +162,16 @@ if(NOT FFX_BUILD_AS_DLL)
 endif()
 
 set(FFX_GLSL ON)
-# disable ASR to focus on NSS part
 set(FFX_NSS ON)
 set(FFX_FI ON)
 set(FFX_OF ON)
+
+option(UNIT_TEST "Build unit tests." OFF)
+option(FFX_CAPTURE_ENABLED "Enable runtime capture integration" ON)
+
+if(UNIT_TEST)
+    add_subdirectory(unit_test)
+endif()
 
 add_subdirectory(./ffx-api)
 
@@ -166,4 +181,5 @@ if(FFX_BUILD_SAMPLES)
 endif()
 
 # Build the NG-feature Vulkan layer (VkLayer_arm_NG) alongside the SDK.
+set(FFX_BUILD_NGLAYER ON)
 add_subdirectory(layer)

@@ -1,4 +1,4 @@
-/* Copyright (c) 2020-2025, Arm Limited and Contributors
+/* Copyright (c) 2020-2026, Arm Limited and Contributors
  * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -16,11 +16,16 @@
  * limitations under the License.
  */
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #include "start_sample.h"
 
 #include <map>
-#include <vector>
 #include <string>
+#include <vector>
 
 #include "apps.h"
 
@@ -49,21 +54,31 @@ void StartSample::list_samples(bool one_per_line) const
 	// Per-sample --app-arg documentation
 	static const std::map<std::string, std::vector<std::string>> app_arg_docs = {
 	    {"nss", {
-	        "NSS_ENABLE=0|1          Enable/disable NSS upscaling (default: 1)",
-	        "NSS_SCALE_FACTOR=float  Upscale factor [1.0, 3.0] (default: 2.0)",
-	        "NSS_FLAGS=0xHEX         Context creation flags override (default: 0)",
-	        "NSS_QUALITY=0|1|2       NSS quality mode: 0=Quality, 1=Balanced, 2=Performance (default: 1)",
-	        "NSS_USE_FRAGMENT=0|1    Execution path: 0=compute, 1=fragment (default: 1)",
-			"NSS_DEBUG_VIEW_MODE=0..16  Debug view mode: 0=overview, 1..16=single tile (default: 0)",
-	    }},
+	                "NSS_ENABLE=0|1          Enable/disable NSS upscaling (default: 1)",
+	                "NSS_SCALE_FACTOR=float  Upscale factor [1.0, 3.0] (default: 2.0)",
+	                "NSS_FLAGS=0xHEX         Raw flags override; pair PRE/POST compute flags in this sample",
+	                "NSS_QUALITY=0|1|2       NSS quality mode: 0=Quality, 1=Balanced, 2=Performance (default: 1)",
+	                "NSS_USE_COMPUTE=0|1     Pre/postprocess path: 0=fragment, 1=compute (default: 0)",
+	                "NSS_LDR_MODE=0|1        [experimental] Use LDR preprocessing path for NSS input (default: 0)",
+	                "NSS_COLOR_FORMAT=R11G11B10|RGBA16F|RGBA32F Input/output color format (default: R11G11B10)",
+	                "NSS_DEBUG_VIEW_MODE=0..16  Debug view mode: 0=overview, 1..16=single tile (default: 0)",
+	                "NSS_MANAGE_HISTORY=0|1  History: 0=application, 1=SDK managed (default: 0)",
+	                "NSS_DATASET_DIR=path    Path to EXR dataset directory (enables dataset mode)",
+	                "NSS_DATASET_SEQUENCE=N Dataset sequence ID (default: 0000)",
+	                "NSS_SAVE_EXR=0|1        Save dataset NSS output to EXR files (default: 0)",
+	                "NSS_OUTPUT_DIR=path     Output root, relative to dataset or absolute (default: result)",
+	            }},
 	    {"nfru", {
-	        "NFRU_DATASET_DIR=path   Path to EXR dataset directory (enables dataset mode)",
-	        "NFRU_DATASET_SEQUENCE=N Dataset sequence ID (default: 0000)",
-	        "NFRU_SAVE_EXR=0|1       Save generated frames to EXR files (default: 0)",
-	        "NFRU_ORBIT_SPEED=float  Camera rotation speed in degrees/frame (default: 0.5)",
-	        "NFRU_USE_FRAGMENT=0|1   Execution path: 0=compute, 1=fragment (default: 0)",
-	        "NFRU_DEBUG_VIEW=0|1     Enable NFRU debug view at startup (default: 0)",
-	    }},
+	                 "NFRU_DATASET_DIR=path   Path to EXR dataset directory (enables dataset mode)",
+	                 "NFRU_DATASET_SEQUENCE=N Dataset sequence ID (default: 0000)",
+	                 "NFRU_SAVE_EXR=0|1       Save generated frames to EXR files (default: 0)",
+	                 "NFRU_ORBIT_SPEED=float  Camera rotation speed in degrees/frame (default: 0.5)",
+	                 "NFRU_USE_FRAGMENT=0|1   Selectable-stage path: 0=compute, 1=fragment (default: 1)",
+	                 "NFRU_ENABLE_MV_HINTS=0|1 Enable/disable optical flow MV hints (default: 0)",
+	                 "NFRU_DEBUG_VIEW=0|1     Enable NFRU debug view at startup (default: 0)",
+	                 "NFRU_DEBUG_CHECKING=0|1 Enable verbose per-frame NFRU runtime logs (default: 0)",
+	                 "NFRU_MANAGE_HISTORY=0|1 History: 0=application, 1=SDK managed (default: 1)",
+	             }},
 	};
 
 	auto samples = apps::get_samples();

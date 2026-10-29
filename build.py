@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 """
@@ -336,7 +336,7 @@ def build_native(args):
     cmake_configure = ["cmake"]
     
     # Add generator if needed
-    if "android" in args.backend:
+    if "android" in args.backend or "linux" in args.backend:
         cmake_configure.extend(["-G", "Ninja"])
     elif platform.system().lower() == "windows" and "windows" in args.backend:
         cmake_configure.extend(["-A", "x64"])

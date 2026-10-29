@@ -18,8 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -44,7 +46,7 @@
 /// NSS patch version.
 ///
 /// @ingroup ffxNss
-#define FFX_NSS_VERSION_PATCH (0)
+#define FFX_NSS_VERSION_PATCH (1)
 
 /// NSS context count
 ///
@@ -123,22 +125,34 @@ typedef enum FfxNssShaderQualityMode
 /// @ingroup ffxNss
 typedef enum FfxNssInitializationFlagBits
 {
-    FFX_NSS_CONTEXT_FLAG_QUANTIZED          = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
-    FFX_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE = (1 << 1),  ///< A bit indicating if the input color data provided is using a high-dynamic range.
-    FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED     = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
-    FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE     = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
-    FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC   = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
-    FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT        = (1 << 5),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
+    FFX_NSS_CONTEXT_FLAG_QUANTIZED = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
+    FFX_NSS_CONTEXT_FLAG_LOW_DYNAMIC_RANGE =
+        (1 << 1),  ///< A bit indicating that input and output color use the experimental LDR [0, 1] path. When unset, the recommended HDR path is used.
+    FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED   = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
+    FFX_NSS_CONTEXT_FLAG_DEPTH_INFINITE   = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
+    FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
+    /// Disable 16-bit resources and force FP32. When unset, FP16 is selected on hardware that supports it.
+    /// On Vulkan, the caller must enable the required device features before context creation.
+    FFX_NSS_CONTEXT_FLAG_DISABLE_16BIT = (1 << 5),
     FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY =
         (1
          << 6),  ///< A bit indicating that the SDK manages the previous history textures internally. When not set the user must supply outputTm1 each dispatch.
-    FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT  = (1 << 7),  ///< A bit indicating that the pre-process shader should run as a fragment job when supported.
-    FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT = (1 << 8),  ///< A bit indicating that the post-process shader should run as a fragment job when supported.
+    FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE =
+        (1 << 7),  ///< A bit indicating that the pre-process shader should run as a compute job. When unset, the fragment path is used.
+    FFX_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE =
+        (1 << 8),  ///< A bit indicating that the post-process shader should run as a compute job. When unset, the fragment path is used.
+    FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE =
+        (1
+         << 9),  ///< A bit indicating that the exposure value should be read from the <c><i>exposureTexture</i></c> resource instead of the scalar <c><i>exposure</i></c>.
+    FFX_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION =
+        (1 << 10),  ///< Input motion vectors include camera jitter. Leave unset for de-jittered motion vectors.
 } FfxNssInitializationFlagBits;
 
 /// Pass a string message
 ///
-/// Used for debug messages.
+/// Called synchronously and independently of <c>FFX_SDK_LOG_LEVEL</c>.
+/// Keep it valid until context destruction; the message is valid only during the call.
+/// The callback must not throw or re-enter NSS.
 ///
 /// @param [in] type                       The type of message.
 /// @param [in] message                    A string message to pass.
@@ -159,14 +173,13 @@ typedef struct FfxNssContextDescription
     FfxDimensions2D         displaySize;  ///< The size of the presentation resolution targeted by the upscaling process.
 
     FfxInterface  backendInterface;  ///< A set of pointers to the backend implementation for FidelityFX SDK
-    FfxNssMessage fpMessage;         ///< A pointer to a function that can receive messages from the runtime.
+    FfxNssMessage fpMessage;         ///< Optional synchronous diagnostics callback.
 } FfxNssContextDescription;
 
 /// @ingroup ffxNss
 typedef enum FfxNssDispatchFlags
 {
-    FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING =
-        (1 << 0),  ///< A bit indicating that dispatch parameters should be validated and errors reported via the message callback.
+    FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING = (1 << 0),  ///< Enables verbose dispatch diagnostics; required validation remains active when unset.
     FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW =
         (1 << 1),  ///< A bit indicating that the debug view pass should run, writing intermediate resources into the debugViews resource.
 } FfxNssDispatchFlags;
@@ -186,14 +199,16 @@ typedef struct FfxNssDispatchDescription
     FfxResource
         outputTm1;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame (at presentation resolution). Ignored when FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is set; required otherwise. The caller is responsible for ping-ponging: pass frame N's output as frame N+1's outputTm1.
 
-    FfxFloatCoords2D jitterOffset;            ///< The subpixel jitter offset applied to the camera.
+    FfxFloatCoords2D jitterOffset;            ///< Render-pixel sample-position offset, opposite to the rasterized image displacement.
     FfxDimensions2D  upscaleSize;             ///< The resolution that was used for rendering the output resources.
     FfxDimensions2D  renderSize;              ///< The resolution that was used for rendering the input resources.
     float            cameraNear;              ///< The distance to the near plane of the camera.
     float            cameraFar;               ///< The distance to the far plane of the camera.
     float            cameraFovAngleVertical;  ///< The camera angle field of view in the vertical direction (expressed in radians).
 
-    float            exposure;           ///< The exposure value.
+    float exposure;  ///< The exposure value. Used when FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is not set.
+    FfxResource
+                     exposureTexture;  ///< Optional <c><i>FfxResource</i></c> containing a 1x1 exposure value (read from texel 0,0 .x). Required when FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is set; ignored otherwise.
     FfxFloatCoords2D motionVectorScale;  ///< The scale applied to the motion vectors.
 
     float    frameTimeDelta;  ///< The time elapsed since the last frame (expressed in milliseconds).
@@ -236,6 +251,8 @@ typedef struct FfxNssContext
 {
     uint32_t data[FFX_NSS_CONTEXT_SIZE * 2];  ///< An opaque set of <c>uint32_t</c> which contain the data for the context.
 } FfxNssContext;
+
+/// Calls using the same NSS context must be externally serialized; re-entrant use is invalid.
 
 /// Create a NSS context from the parameters
 /// programmed to the <c><i>FfxNssCreateParams</i></c> structure.
@@ -283,6 +300,19 @@ typedef struct FfxNssContext
 /// @ingroup ffxNss
 FFX_API FfxErrorCode ffxNssContextCreate(FfxNssContext* pContext, const FfxNssContextDescription* pContextDescription);
 
+/// Queries per-frame GPU memory usage for a NSS context.
+///
+/// @param [in]  context     A pointer to a <c><i>FfxNssContext</i></c> structure.
+/// @param [out] vramUsage   A pointer to a <c><i>FfxEffectMemoryUsage</i></c> structure.
+///
+/// @retval
+/// FFX_OK                              The operation completed successfully.
+/// @retval
+/// FFX_ERROR_CODE_NULL_POINTER         The operation failed because either <c><i>context</i></c> or <c><i>vramUsage</i></c> was <c><i>NULL</i></c>.
+///
+/// @ingroup ffxNss
+FFX_API FfxErrorCode ffxNssContextGetGpuMemoryUsage(FfxNssContext* context, FfxEffectMemoryUsage* vramUsage);
+
 /// Dispatch the various passes that constitute NSS.
 ///
 /// NSS is a composite effect, meaning that it is compromised of multiple
@@ -306,6 +336,9 @@ FFX_API FfxErrorCode ffxNssContextCreate(FfxNssContext* pContext, const FfxNssCo
 /// structure. For more guidance on camera jitter please consult the
 /// documentation for <c><i>ffxNssGetJitterOffset</i></c> as well as the
 /// accompanying overview documentation for NSS.
+///
+/// If a backend callback fails after dispatch work begins, discard the affected
+/// command list and destroy and recreate the context before dispatching again.
 ///
 /// @param [in] pContext                 A pointer to a <c><i>FfxNssContext</i></c> structure.
 /// @param [in] pDispatchDescription     A pointer to a <c><i>FfxNssDispatchDescription</i></c> structure.
@@ -433,25 +466,6 @@ FFX_API int32_t ffxNssGetJitterPhaseCount(int32_t renderWidth, int32_t displayWi
 ///
 /// @ingroup ffxNss
 FFX_API FfxErrorCode ffxNssGetJitterOffset(float* pOutX, float* pOutY, int32_t index, int32_t phaseCount);
-
-/// Query whether the preprocess and postprocess stages are executing as
-/// fragment jobs or compute jobs for the given NSS context.
-///
-/// The answer is determined at context-creation time based on the requested
-/// flags and the device capabilities detected at that point. A caller may
-/// pass <c>NULL</c> for either output pointer if that value is not needed.
-///
-/// @param [in]  pContext                    A pointer to an initialised <c><i>FfxNssContext</i></c>.
-/// @param [out] pOutPreProcessUsesFragment  Receives <c>true</c> if pre-process runs as a fragment job. May be <c>NULL</c>.
-/// @param [out] pOutPostProcessUsesFragment Receives <c>true</c> if post-process runs as a fragment job. May be <c>NULL</c>.
-///
-/// @retval
-/// FFX_OK                              The operation completed successfully.
-/// @retval
-/// FFX_ERROR_INVALID_POINTER           <c><i>pContext</i></c> was <c>NULL</c>.
-///
-/// @ingroup ffxNss
-FFX_API FfxErrorCode ffxNssGetPipelineStageInfo(FfxNssContext* pContext, bool* pOutPreProcessUsesFragment, bool* pOutPostProcessUsesFragment);
 
 /// A helper function to check if a resource is
 /// <c><i>FFX_NSS_RESOURCE_IDENTIFIER_NULL</i></c>.

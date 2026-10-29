@@ -18,98 +18,97 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
-#include <volk.h>
+#include "core/buffer.h"
+#include "core/device.h"
 
-/**
- * @brief Loads dataset frames and sequence metadata into staging buffers.
- *
- * Owns one host-visible staging buffer per swapchain image for color, depth,
- * and motion vectors. The caller copies from those buffers into the input
- * images used by NFRU.
- */
-class DatasetLoader
+struct NFRUFrameParams
+{
+	bool  reset{false};
+	float view_projection[16]{};
+	float jitter_x{0.0f};
+	float jitter_y{0.0f};
+	float camera_near{0.0f};
+	float camera_far{0.0f};
+	float camera_fov_angle_vertical{0.0f};
+	float frame_time_delta_ms{0.0f};
+	float motion_vector_scale_x{0.0f};
+	float motion_vector_scale_y{0.0f};
+	float view_space_to_meters_factor{1.0f};
+};
+
+// Loads sequence metadata and one color/depth/motion staging triplet per
+// RenderFrame slot.
+class NFRUDatasetLoader
 {
   public:
-	/// Per-frame camera and timing parameters used for NFRU dispatch.
-	struct FrameParams
-	{
-		float viewProjection[16];             ///< Column-major view-projection matrix
-		float jitterX;                        ///< Subpixel jitter offset X (pixels)
-		float jitterY;                        ///< Subpixel jitter offset Y (pixels)
-		float cameraNear;                     ///< Near plane distance
-		float cameraFar;                      ///< Far plane distance
-		float cameraFovAngleVertical;         ///< FOV in radians
-		float frameTimeDelta;                 ///< Frame time in ms
-		float motionVectorScaleX;             ///< motionVectorScale.x
-		float motionVectorScaleY;             ///< motionVectorScale.y
-	};
-
-	~DatasetLoader();
-
-	/// Parses sequence metadata, probes EXR extents, and allocates staging buffers.
-	bool init(VkDevice device, VkPhysicalDevice gpu,
+	bool init(vkb::core::DeviceC &device,
 	          const std::string &dataset_dir, const std::string &dataset_sequence,
 	          uint32_t swapchain_count);
 
-	int  total_frames() const;
+	uint64_t total_frames() const;
+	int      interpolated_source_frame(int frame_index) const;
 
-	/// Returns the source-frame index represented by the interpolated output.
-	int  interpolated_source_frame(int frame) const { return frame * 2 - 1; }
+	bool get_frame_params(int frame_index, NFRUFrameParams &frame_params) const;
 
-	/// Fills per-frame camera and timing parameters from the parsed sequence data.
-	bool get_frame_params(int frame, FrameParams &out) const;
+	bool load_frame(int frame_index, uint32_t swapchain_index, NFRUFrameParams &frame_params);
 
-	/// Loads EXR data for @p frame into staging buffers[@p swapchain_index].
-	bool load_frame(int frame, uint32_t swapchain_index, FrameParams &out);
-
-	/// Per-type staging buffer handles for vkCmdCopyBufferToImage.
-	VkBuffer get_color_staging(uint32_t swapchain_index) const;
-	VkBuffer get_depth_staging(uint32_t swapchain_index) const;
-	VkBuffer get_mv_staging(uint32_t swapchain_index) const;
+	VkBuffer get_color_staging_buffer(uint32_t swapchain_index) const;
+	VkBuffer get_depth_staging_buffer(uint32_t swapchain_index) const;
+	VkBuffer get_motion_vector_staging_buffer(uint32_t swapchain_index) const;
 
 	VkExtent2D get_display_size() const;
 	VkExtent2D get_render_size() const;
+	bool       uses_inverted_depth() const;
+	bool       uses_infinite_far() const;
 
   private:
-	struct FrameData
+	struct Config
 	{
-		float viewProjection[16]{};
-		float fovY       = 0.75f;
-		float cameraNear = 10.0f;
-		float cameraFar  = 5000.0f;
-		float jitterX    = 0.0f;
-		float jitterY    = 0.0f;
+		bool  apply_tonemap             = true;
+		bool  flip_depth                = false;
+		bool  transpose_view_projection = true;
+		bool  override_exposure         = false;
+		float exposure                  = 1.0f;
 	};
 
-	std::vector<FrameData> frames_;
-	float                   fps_            = 60.0f;
-	bool                    reverse_z_      = false;
+	struct FrameMetadata
+	{
+		bool  reset{false};
+		float view_projection[16]{};
+		float fov_y               = 0.75f;
+		float camera_near         = 10.0f;
+		float camera_far          = 10.0f;
+		float jitter_x            = 0.0f;
+		float jitter_y            = 0.0f;
+		float exposure            = 1.0f;
+		float frame_time_delta_ms = 0.0f;
+		float motion_vector_scale_x = 0.0f;
+		float motion_vector_scale_y = 0.0f;
+		float view_space_to_meters_factor = 1.0f;
+	};
+	struct StagingBuffers
+	{
+		std::unique_ptr<vkb::core::BufferC> color;
+		std::unique_ptr<vkb::core::BufferC> depth;
+		std::unique_ptr<vkb::core::BufferC> motion_vectors;
+	};
+
+	std::vector<FrameMetadata> frames_;
+	float                      frame_rate_hz_  = 60.0f;
+	bool                       depth_inverted_ = false;
+	bool                       depth_infinite_ = false;
+	Config                     config_{};
 
 	std::string color_dir_;
 	std::string depth_dir_;
-	std::string mv_dir_;
+	std::string motion_dir_;
 
 	VkExtent2D display_size_{};
 	VkExtent2D render_size_{};
 
-	// ── Per-swapchain staging buffers ───
-	// One buffer per image type per swapchain index.
-	// EXR data is loaded/converted directly into the mapped pointer.
-	VkDevice device_ = VK_NULL_HANDLE;
-	struct StagingBuffer
-	{
-		VkBuffer       buffer = VK_NULL_HANDLE;
-		VkDeviceMemory memory = VK_NULL_HANDLE;
-		void          *mapped = nullptr;
-	};
-	std::vector<StagingBuffer> color_staging_;
-	std::vector<StagingBuffer> depth_staging_;
-	std::vector<StagingBuffer> mv_staging_;
-
-	StagingBuffer create_staging_buffer(VkPhysicalDevice gpu, VkDeviceSize size);
-	void          destroy_staging_buffer(StagingBuffer &sb);
+	std::vector<StagingBuffers> staging_buffers_;
 };

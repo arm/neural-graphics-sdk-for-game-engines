@@ -20,15 +20,20 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include <algorithm>  // for max used inside SPD CPU code.
 #include <cfloat>     // for FLT_EPSILON
 #include <cmath>      // for fabs, abs, sinf, sqrt, etc.
-#include <string.h>   // for memset
+#include <cstdio>
+#include <limits>
+#include <string.h>  // for memset
 
 #include "FidelityFX/host/ffx_opticalflow.h"
+#include "FidelityFX/host/ffx_frameinterpolation_resolution.h"
 #define FFX_CPU
 
 #include "FidelityFX/gpu/ffx_core.h"
@@ -36,11 +41,19 @@
 
 #include "FidelityFX/host/ffx_util.h"
 
+#include "ffx_logging.h"
+#include "ffx_opticalflow_trace.h"
+
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-variable"
 #endif
 
 #include "ffx_opticalflow_private.h"
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "OpticalFlow";
+}
 
 // lists to map shader resource bindpoint name to resource identifier
 typedef struct ResourceBinding
@@ -82,7 +95,7 @@ static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
                 break;
         }
         if (mapIndex == FFX_COUNTOF(srvTextureBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+            return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the shader SRV binding name is not recognized");
 
         inoutPipeline->srvTextureBindings[srvIndex].resourceIdentifier = srvTextureBindingTable[mapIndex].index;
     }
@@ -96,7 +109,7 @@ static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
                 break;
         }
         if (mapIndex == FFX_COUNTOF(uavTextureBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+            return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the shader UAV binding name is not recognized");
 
         inoutPipeline->uavTextureBindings[uavIndex].resourceIdentifier = uavTextureBindingTable[mapIndex].index;
     }
@@ -110,7 +123,7 @@ static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
                 break;
         }
         if (mapIndex == FFX_COUNTOF(rtResourceBindingTable))
-            return FFX_ERROR_INVALID_ARGUMENT;
+            return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the shader render target binding name is not recognized");
 
         inoutPipeline->rtBindings[rtIndex].resourceIdentifier = rtResourceBindingTable[mapIndex].index;
     }
@@ -118,10 +131,8 @@ static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
     return FFX_OK;
 }
 
-static FfxOpticalFlowDescription createOpticalFlowDescription(FfxSurfaceFormat               colorFormat,
-                                                              FfxDimensions2D                resolution,
-                                                              FfxOpticalFlowGridSize         gridSize,
-                                                              FfxOpticalFlowPerformanceLevel performanceLevel)
+static FfxOpticalFlowDescription createOpticalFlowDescription(
+    FfxSurfaceFormat colorFormat, FfxDimensions2D resolution, FfxOpticalFlowGridSize gridSize, FfxOpticalFlowPerformanceLevel performanceLevel, bool useMVHints)
 {
     // Mimic the shader blob memory style for now.
     // TODO: We might want to dynamically allocate this and clean it up after we are done with it instead of allocating static memory.
@@ -153,7 +164,7 @@ static FfxOpticalFlowDescription createOpticalFlowDescription(FfxSurfaceFormat  
 
     FfxOpticalFlowDescription ofDesc{};
 
-    ofDesc.srvTextureCount               = sizeof(g_srv_texture_bindings) / sizeof(g_srv_texture_bindings[0]);
+    ofDesc.srvTextureCount               = useMVHints ? sizeof(g_srv_texture_bindings) / sizeof(g_srv_texture_bindings[0]) : 2;
     ofDesc.boundSRVTextureNames          = g_srv_names;
     ofDesc.boundSRVTextures              = g_srv_texture_bindings;
     ofDesc.boundSRVTextureCounts         = g_srv_textureCount;
@@ -188,10 +199,10 @@ static uint32_t getPipelinePermutationOptions(uint32_t contextFlags)
         permutationOptions |= OPTICALFLOW_SHADER_PERMUTATION_DEPTH_INVERTED;
     }
 
-    // Check for MV hints fragment flag
-    if (contextFlags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_FRAGMENT)
+    // Check for MV hints compute flag
+    if (contextFlags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_COMPUTE)
     {
-        permutationOptions |= OPTICALFLOW_SHADER_PERMUTATION_MV_HINTS_FRAGMENT;
+        permutationOptions |= OPTICALFLOW_SHADER_PERMUTATION_MV_HINTS_COMPUTE;
     }
 
     return permutationOptions;
@@ -206,17 +217,23 @@ static FfxErrorCode createPipelineStates(OpticalFlowContext_Private* context)
     FfxOpticalFlowDescription ofDesc = createOpticalFlowDescription(context->contextDescription.backBufferFormat,
                                                                     context->contextDescription.resolution,
                                                                     context->contextDescription.gridSize,
-                                                                    context->contextDescription.performanceLevel);
+                                                                    context->contextDescription.performanceLevel,
+                                                                    context->useMVHints);
 
     // TODO: add more validation on the connection type with device caps like costSupported, hintSupported
 
     FFX_VALIDATE(context->contextDescription.backendInterface.fpCreateOpticalFlowPipeline(
         &context->contextDescription.backendInterface, "ARM-OpticalFlow", ofDesc, context->effectContextId, &context->pipelineOpticalflow));
 
-    patchResourceBindings(&context->pipelineOpticalflow);
+    FFX_VALIDATE(patchResourceBindings(&context->pipelineOpticalflow));
 
-    context->useMVHintsFragment = !!(context->contextDescription.flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_FRAGMENT);
-    if (context->useMVHintsFragment)
+    if (!context->useMVHints)
+    {
+        return FFX_OK;
+    }
+
+    context->useMVHintsCompute = !!(context->contextDescription.flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_COMPUTE);
+    if (!context->useMVHintsCompute)
     {
         ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineFragmentMVHints, context->effectContextId);
 
@@ -229,6 +246,11 @@ static FfxErrorCode createPipelineStates(OpticalFlowContext_Private* context)
         rootConstantDescs.stage                     = FFX_BIND_PIXEL_SHADER_STAGE;
         pipelineDescription.rootConstantBufferCount = 1;
         pipelineDescription.rootConstants           = &rootConstantDescs;
+
+        FfxSamplerDescription samplerDesc = {
+            FFX_FILTER_TYPE_MINMAGMIP_POINT, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_PIXEL_SHADER_STAGE, FFX_FALSE};
+        pipelineDescription.samplerCount = 1;
+        pipelineDescription.samplers     = &samplerDesc;
 
         strncpy(pipelineDescription.name, "ARM-OpticalFlow-ComputeMVHints", FFX_RESOURCE_NAME_SIZE - 1);
         pipelineDescription.name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
@@ -243,7 +265,7 @@ static FfxErrorCode createPipelineStates(OpticalFlowContext_Private* context)
                                                                                            context->effectContextId,
                                                                                            &context->pipelineFragmentMVHints));
 
-        patchResourceBindings(&context->pipelineFragmentMVHints);
+        FFX_VALIDATE(patchResourceBindings(&context->pipelineFragmentMVHints));
     }
     else
     {
@@ -259,11 +281,15 @@ static FfxErrorCode createPipelineStates(OpticalFlowContext_Private* context)
         pipelineDescription.rootConstantBufferCount = 1;
         pipelineDescription.rootConstants           = &rootConstantDescs;
 
+        FfxSamplerDescription samplerDesc = {
+            FFX_FILTER_TYPE_MINMAGMIP_POINT, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_ADDRESS_MODE_CLAMP, FFX_BIND_COMPUTE_SHADER_STAGE, FFX_FALSE};
+        pipelineDescription.samplerCount = 1;
+        pipelineDescription.samplers     = &samplerDesc;
+
         strncpy(pipelineDescription.name, "ARM-OpticalFlow-ComputeMVHints", FFX_RESOURCE_NAME_SIZE - 1);
         pipelineDescription.name[FFX_RESOURCE_NAME_SIZE - 1] = '\0';
 
-        uint32_t permutationOptions = getPipelinePermutationOptions(context->contextDescription.flags);
-        permutationOptions &= ~OPTICALFLOW_SHADER_PERMUTATION_MV_HINTS_FRAGMENT;
+        const uint32_t permutationOptions = getPipelinePermutationOptions(context->contextDescription.flags);
 
         FFX_VALIDATE(context->contextDescription.backendInterface.fpCreateComputePipeline(&context->contextDescription.backendInterface,
                                                                                           ARM_EFFECT_OPTICALFLOW,
@@ -273,7 +299,7 @@ static FfxErrorCode createPipelineStates(OpticalFlowContext_Private* context)
                                                                                           context->effectContextId,
                                                                                           &context->pipelineComputeMVHints));
 
-        patchResourceBindings(&context->pipelineComputeMVHints);
+        FFX_VALIDATE(patchResourceBindings(&context->pipelineComputeMVHints));
     }
 
     return FFX_OK;
@@ -314,13 +340,14 @@ static FfxErrorCode opticalFlowVkCreate(OpticalFlowContext_Private* context, con
     FfxErrorCode errorCode = context->contextDescription.backendInterface.fpCreateBackendContext(
         &context->contextDescription.backendInterface, ARM_EFFECT_OPTICALFLOW, nullptr, &context->effectContextId);
     FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
+    context->backendContextCreated = true;
 
     // call out for device caps.
     FfxDeviceCapabilities capabilities;
     FFX_VALIDATE(context->contextDescription.backendInterface.fpGetDeviceCapabilities(&context->contextDescription.backendInterface, &capabilities));
     if (!capabilities.dataGraphOFSupported)
     {
-        return FFX_ERROR_NULL_DEVICE;
+        return ffxLogError(FFX_ERROR_NULL_DEVICE, "the device does not support data graph optical flow");
     }
 
     const bool outputGridSizeSupported = (contextDescription->gridSize & capabilities.supportedOutputGridSizes) != 0;
@@ -328,7 +355,7 @@ static FfxErrorCode opticalFlowVkCreate(OpticalFlowContext_Private* context, con
     // const bool hintGridSizeSupported   = (contextDescription->gridSize & capabilities.supportedHintGridSizes) != 0;
     if (!outputGridSizeSupported)
     {
-        return FFX_ERROR_NULL_DEVICE;
+        return ffxLogError(FFX_ERROR_NULL_DEVICE, "the requested optical flow grid size is not supported");
     }
 
     if ((contextDescription->resolution.width < capabilities.dataGraphOFMinWidth) ||
@@ -336,7 +363,7 @@ static FfxErrorCode opticalFlowVkCreate(OpticalFlowContext_Private* context, con
         (contextDescription->resolution.width > capabilities.dataGraphOFMaxWidth) ||
         (contextDescription->resolution.height > capabilities.dataGraphOFMaxHeight))
     {
-        return FFX_ERROR_NULL_DEVICE;
+        return ffxLogError(FFX_ERROR_NULL_DEVICE, "the requested optical flow resolution is outside the device limits");
     }
 
     // set defaults
@@ -350,29 +377,37 @@ static FfxErrorCode opticalFlowVkCreate(OpticalFlowContext_Private* context, con
     const FfxDimensions2D        renderSize  = contextDescription->maxRenderSize;
     const FfxOpticalFlowGridSize gridSize    = contextDescription->gridSize;
     context->opticalFlowSize                 = GetOpticalFlowTextureSizeFromBlockSize(displaySize, GetOpticalFlowBlockSize(gridSize));
-
-    const FfxResourceUsage otherProcessOutputImageUsage =
-        context->contextDescription.flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_FRAGMENT ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
-    // Declare internal resources needed
-    const FfxInternalResourceDescription internalSurfaceDesc[] = {
-        {FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_COMPUTED_MOTION_VECTORS,
-         "ArmOF_Computed_Motion_Vectors",
-         FFX_RESOURCE_TYPE_TEXTURE2D,
-         FfxResourceUsage(otherProcessOutputImageUsage),
-         FFX_SURFACE_FORMAT_R16G16_FLOAT,
-         context->opticalFlowSize.width,
-         context->opticalFlowSize.height,
-         1,
-         FFX_RESOURCE_FLAGS_NONE,
-         {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}},
-    };
+    context->mvDepthInputSize                = ffxNfruResolveMvDepthSize(renderSize, contextDescription->mvDepthSize);
+    FfxDimensions2D mvDepthLane              = contextDescription->mvDepthSize;
+    if (mvDepthLane.width == 0 && mvDepthLane.height == 0)
+    {
+        mvDepthLane = ffxNfruDeriveResolutionPlan(displaySize, renderSize, FFX_FRAMEINTERPOLATION_DATA_GRAPH_ALIGNMENT).mvDepthLane;
+    }
+    context->contextDescription.mvDepthSize               = mvDepthLane;
+    context->computeMVHintsConstants.mv_depth_dims[0]     = mvDepthLane.width;
+    context->computeMVHintsConstants.mv_depth_dims[1]     = mvDepthLane.height;
+    context->computeMVHintsConstants.inv_mv_depth_dims[0] = 1.0f / static_cast<float>(mvDepthLane.width);
+    context->computeMVHintsConstants.inv_mv_depth_dims[1] = 1.0f / static_cast<float>(mvDepthLane.height);
 
     // clear the SRV resources to NULL.
     memset(context->srvResources, 0, sizeof(context->srvResources));
 
-    for (int32_t currentSurfaceIndex = 0; currentSurfaceIndex < FFX_ARRAY_ELEMENTS(internalSurfaceDesc); ++currentSurfaceIndex)
+    context->useMVHints = !!(context->contextDescription.flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS);
+    if (context->useMVHints)
     {
-        FFX_VALIDATE(createResourceFromDescription(context, &internalSurfaceDesc[currentSurfaceIndex]));
+        const FfxResourceUsage mvHintsUsage =
+            context->contextDescription.flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_COMPUTE ? FFX_RESOURCE_USAGE_UAV : FFX_RESOURCE_USAGE_RENDERTARGET;
+        const FfxInternalResourceDescription mvHintsSurfaceDesc = {FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_COMPUTED_MOTION_VECTORS,
+                                                                   "ArmOF_Computed_Motion_Vectors",
+                                                                   FFX_RESOURCE_TYPE_TEXTURE2D,
+                                                                   FfxResourceUsage(mvHintsUsage),
+                                                                   FFX_SURFACE_FORMAT_R16G16_FLOAT,
+                                                                   context->opticalFlowSize.width,
+                                                                   context->opticalFlowSize.height,
+                                                                   1,
+                                                                   FFX_RESOURCE_FLAGS_NONE,
+                                                                   {FFX_RESOURCE_INIT_DATA_TYPE_UNINITIALIZED}};
+        FFX_VALIDATE(createResourceFromDescription(context, &mvHintsSurfaceDesc));
     }
 
     // copy resources to uavResrouces list
@@ -388,6 +423,10 @@ static FfxErrorCode opticalFlowVkCreate(OpticalFlowContext_Private* context, con
 static FfxErrorCode opticalFlowVkRelease(OpticalFlowContext_Private* context)
 {
     FFX_ASSERT(context);
+    if (!context->backendContextCreated)
+    {
+        return FFX_OK;
+    }
 
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineOpticalflow, context->effectContextId);
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineComputeMVHints, context->effectContextId);
@@ -406,13 +445,13 @@ static FfxErrorCode opticalFlowVkRelease(OpticalFlowContext_Private* context)
         ffxSafeReleaseResource(&context->contextDescription.backendInterface, context->srvResources[currentResourceIndex], context->effectContextId);
     }
 
-    // Destroy the context
-    context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId);
+    context->backendContextCreated = false;
+    FFX_VALIDATE(context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId));
 
     return FFX_OK;
 }
 
-static void scheduleDataGraph(OpticalFlowContext_Private* context, FfxPipelineState* pipeline, bool reset)
+static FfxErrorCode scheduleDataGraph(OpticalFlowContext_Private* context, FfxPipelineState* pipeline, bool reset)
 {
     FfxGpuJobDescription dispatchJob = {FFX_GPU_JOB_DATA_GRAPH};
 
@@ -451,10 +490,10 @@ static void scheduleDataGraph(OpticalFlowContext_Private* context, FfxPipelineSt
     }
     dispatchJob.dataGraphJobDescription.pipeline = *pipeline;
 
-    context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
 }
 
-static void scheduleMVHintsAndCopyResources(
+static FfxErrorCode scheduleMVHintsAndCopyResources(
     OpticalFlowContext_Private* context, const FfxPipelineState* pipeline, uint32_t dispatchX, uint32_t dispatchY, const char* debugName)
 {
     FfxGpuJobDescription dispatchJob = {FFX_GPU_JOB_COMPUTE};
@@ -539,10 +578,10 @@ static void scheduleMVHintsAndCopyResources(
             context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
     }
 
-    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob) == FFX_OK);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
 }
 
-static void scheduleFragmentMVHints(
+static FfxErrorCode scheduleFragmentMVHints(
     OpticalFlowContext_Private* context, const FfxPipelineState* pipeline, uint32_t width, uint32_t height, const char* debugName)
 {
     FfxFragmentJobDescription jobDescriptor = {};
@@ -609,47 +648,72 @@ static void scheduleFragmentMVHints(
     }
     dispatchJob.fragmentJobDescriptor = jobDescriptor;
 
-    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob) == FFX_OK);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
 }
 
-static FfxErrorCode ArmOpticalFlowDispatch(OpticalFlowContext_Private* context, const FfxOpticalFlowDispatchDescription* params)
+static FfxErrorCode ArmOpticalFlowDispatch(OpticalFlowContext_Private* context, const FfxOpticalFlowDispatchDescription* params, FfxNfruOpticalFlowTrace* trace)
 {
+    const auto setTraceStage = [trace](FfxNfruOfStage stage) {
+        if (trace)
+        {
+            trace->failedStage = stage;
+        }
+    };
+
     // take a short cut to the command list
     FfxCommandList commandList = params->commandList;
 
-    // Input: register color resource
-    context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                    &params->color,
-                                                                    context->effectContextId,
-                                                                    &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_COLOR]);
+    bool       resourcesRegistered = false;
+    const auto unregisterResources = [&]() -> FfxErrorCode {
+        if (!resourcesRegistered)
+        {
+            return FFX_OK;
+        }
+        return context->contextDescription.backendInterface.fpUnregisterResources(
+            &context->contextDescription.backendInterface, commandList, context->effectContextId);
+    };
+    const auto registerResource = [&](const FfxResource& resource, FfxResourceInternal* internalResource) -> FfxErrorCode {
+        const FfxErrorCode result = context->contextDescription.backendInterface.fpRegisterResource(
+            &context->contextDescription.backendInterface, &resource, context->effectContextId, internalResource);
+        resourcesRegistered |= result == FFX_OK;
+        return result;
+    };
+    const auto returnAfterCleanup = [&](FfxErrorCode result) -> FfxErrorCode {
+        (void)unregisterResources();
+        return result;
+    };
 
-    // Input: register depth resource
-    context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                    &params->depth,
-                                                                    context->effectContextId,
-                                                                    &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_DEPTH]);
-
-    // Input: register depthtm1 resource
-    context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                    &params->depthTm1,
-                                                                    context->effectContextId,
-                                                                    &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_PREV_DEPTH]);
-
-    // Input: register colortm1 resource
-    context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                    &params->colorTm1,
-                                                                    context->effectContextId,
-                                                                    &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_PREV_COLOR]);
-
-    // Output: register output optical flow vector
-    context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
-                                                                    &params->opticalFlowVector,
-                                                                    context->effectContextId,
-                                                                    &context->uavResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_RESULT]);
+    setTraceStage(FfxNfruOfStage::RegisterResources);
+    FfxErrorCode errorCode = registerResource(params->color, &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_COLOR]);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
+    errorCode = registerResource(params->depth, &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_DEPTH]);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
+    errorCode = registerResource(params->depthTm1, &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_PREV_DEPTH]);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
+    errorCode = registerResource(params->colorTm1, &context->srvResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_PREV_COLOR]);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
+    errorCode = registerResource(params->opticalFlowVector, &context->uavResources[FFX_OPTICALFLOW_RESOURCE_IDENTIFIER_RESULT]);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
 
     // On first execution or reset, clear previous depth buffers
     if (params->reset)
     {
+        setTraceStage(FfxNfruOfStage::ClearHistory);
         FfxGpuJobDescription clearJob = {FFX_GPU_JOB_CLEAR_FLOAT};
         const float          clearValuesToZeroFloat[]{0.f, 0.f, 0.f, 0.f};
         memcpy(clearJob.clearJobDescriptor.color, clearValuesToZeroFloat, 4 * sizeof(float));
@@ -658,12 +722,18 @@ static FfxErrorCode ArmOpticalFlowDispatch(OpticalFlowContext_Private* context, 
         for (uint32_t i = 0; i < FFX_COUNTOF(resources_to_clear); ++i)
         {
             clearJob.clearJobDescriptor.target = context->srvResources[resources_to_clear[i]];
-            FFX_VALIDATE(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob));
+            errorCode = context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &clearJob);
+            if (errorCode != FFX_OK)
+            {
+                return returnAfterCleanup(errorCode);
+            }
         }
     }
 
-    // Compute MV hints from depth and copy resources for next frame use
+    // Compute MV hints from depth when enabled.
+    if (context->useMVHints)
     {
+        setTraceStage(FfxNfruOfStage::MotionVectorHints);
         // Set constant buffer for MV hints computation
         const FfxDimensions2D depthResolution{params->depthTm1.description.width, params->depthTm1.description.height};
 
@@ -682,16 +752,20 @@ static FfxErrorCode ArmOpticalFlowDispatch(OpticalFlowContext_Private* context, 
         MatrixMul4x4(params->viewProjection, invViewProjTM1, context->computeMVHintsConstants.motion_matrix_m1p1);
 
         // Stage constant buffer
-        FFX_VALIDATE(
+        errorCode =
             context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
                                                                                        &context->computeMVHintsConstants,
                                                                                        sizeof(context->computeMVHintsConstants),
-                                                                                       &context->constantBuffers[FFX_OPTICALFLOW_CONSTANTBUFFER_IDENTIFIER]));
+                                                                                       &context->constantBuffers[FFX_OPTICALFLOW_CONSTANTBUFFER_IDENTIFIER]);
+        if (errorCode != FFX_OK)
+        {
+            return returnAfterCleanup(errorCode);
+        }
 
-        if (context->useMVHintsFragment)
+        if (!context->useMVHintsCompute)
         {
             // Fragment path: dispatch at OF dims (the MV hints render target size)
-            scheduleFragmentMVHints(
+            errorCode = scheduleFragmentMVHints(
                 context, &context->pipelineFragmentMVHints, context->opticalFlowSize.width, context->opticalFlowSize.height, "ArmOF_MVHints");
         }
         else
@@ -699,45 +773,111 @@ static FfxErrorCode ArmOpticalFlowDispatch(OpticalFlowContext_Private* context, 
             // Compute path: dispatch at OF dims
             uint32_t dispatchX = (context->opticalFlowSize.width + 15) / 16;
             uint32_t dispatchY = (context->opticalFlowSize.height + 15) / 16;
-            scheduleMVHintsAndCopyResources(context, &context->pipelineComputeMVHints, dispatchX, dispatchY, "ArmOF_MVHints");
+            errorCode          = scheduleMVHintsAndCopyResources(context, &context->pipelineComputeMVHints, dispatchX, dispatchY, "ArmOF_MVHints");
+        }
+        if (errorCode != FFX_OK)
+        {
+            return returnAfterCleanup(errorCode);
         }
     }
 
-    // Schedule optical flow data graph with computed mv hints
-    scheduleDataGraph(context, &context->pipelineOpticalflow, params->reset);
+    // Schedule optical flow data graph, with the MV hint input bound only when enabled.
+    setTraceStage(FfxNfruOfStage::DataGraph);
+    errorCode = scheduleDataGraph(context, &context->pipelineOpticalflow, params->reset);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
 
-    // Save current view projection for next frame
-    memcpy(context->lastFrameViewProjection, params->viewProjection, sizeof(context->lastFrameViewProjection));
-
-    context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList, context->effectContextId);
+    setTraceStage(FfxNfruOfStage::RecordCommands);
+    errorCode =
+        context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList, context->effectContextId);
+    if (errorCode != FFX_OK)
+    {
+        return returnAfterCleanup(errorCode);
+    }
 
     // Release dynamic resources
-    context->contextDescription.backendInterface.fpUnregisterResources(&context->contextDescription.backendInterface, commandList, context->effectContextId);
+    setTraceStage(FfxNfruOfStage::Unregister);
+    errorCode = unregisterResources();
+    if (errorCode != FFX_OK)
+    {
+        return errorCode;
+    }
+
+    // Commit temporal state only after the backend accepted all recorded work.
+    memcpy(context->lastFrameViewProjection, params->viewProjection, sizeof(context->lastFrameViewProjection));
 
     context->firstExecution = false;
     // Toggle between 0 and 1 to choose the correct internal resources
     context->resourceFrameIndex ^= 1;
 
+    setTraceStage(FfxNfruOfStage::None);
     return FFX_OK;
 }
 
-FfxErrorCode ffxOpticalFlowContextCreate(FfxOpticalFlowContext* context, FfxOpticalFlowContextDescription* contextDescription)
+static FfxErrorCode opticalFlowContextCreateInternal(FfxOpticalFlowContext*            context,
+                                                     FfxOpticalFlowContextDescription* contextDescription,
+                                                     const FfxDimensions2D*            mvDepthInputSize)
 {
-    // zero context memory
-    memset(context, 0, sizeof(FfxOpticalFlowContext));
-
     // check pointers are valid.
     FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
     FFX_RETURN_ON_ERROR(contextDescription, FFX_ERROR_INVALID_POINTER);
 
+    constexpr uint32_t maxShaderDimension = static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
+    if (mvDepthInputSize && (!mvDepthInputSize->width || !mvDepthInputSize->height || mvDepthInputSize->width > maxShaderDimension ||
+                             mvDepthInputSize->height > maxShaderDimension))
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "frame-generation depth input dimensions must fit the signed shader range");
+    }
+
+    // zero context memory
+    memset(context, 0, sizeof(FfxOpticalFlowContext));
+
     // validate that all callbacks are set for the interface
     FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpCreateBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
     FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpDestroyBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
+    FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpGetDeviceCapabilities, FFX_ERROR_INCOMPLETE_INTERFACE);
+    const bool usesMvHints         = (contextDescription->flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS) != 0;
+    const bool usesComputeMvHints  = usesMvHints && (contextDescription->flags & FFX_OPTICALFLOW_ENABLE_MV_HINTS_COMPUTE) != 0;
+    const bool usesFragmentMvHints = usesMvHints && !usesComputeMvHints;
+    FFX_RETURN_ON_ERROR(!usesFragmentMvHints || contextDescription->backendInterface.fpCreateGraphicsPipeline, FFX_ERROR_INCOMPLETE_INTERFACE);
+    FFX_RETURN_ON_ERROR(!usesComputeMvHints || contextDescription->backendInterface.fpCreateComputePipeline, FFX_ERROR_INCOMPLETE_INTERFACE);
 
     // if a scratch buffer is declared, then we must have a size
     if (contextDescription->backendInterface.scratchBuffer)
     {
         FFX_RETURN_ON_ERROR(contextDescription->backendInterface.scratchBufferSize, FFX_ERROR_INCOMPLETE_INTERFACE);
+    }
+
+    if (!contextDescription->resolution.width || !contextDescription->resolution.height || !contextDescription->maxRenderSize.width ||
+        !contextDescription->maxRenderSize.height)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "context creation requires nonzero resolution and maxRenderSize dimensions");
+    }
+
+    if (contextDescription->resolution.width > maxShaderDimension || contextDescription->resolution.height > maxShaderDimension ||
+        contextDescription->maxRenderSize.width > maxShaderDimension || contextDescription->maxRenderSize.height > maxShaderDimension)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "context creation requires resolution and maxRenderSize dimensions within the shader range");
+    }
+
+    const bool useDerivedMvDepthLane = contextDescription->mvDepthSize.width == 0 && contextDescription->mvDepthSize.height == 0;
+    if (!useDerivedMvDepthLane && (!contextDescription->mvDepthSize.width || !contextDescription->mvDepthSize.height))
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "mvDepthSize must be {0, 0} or contain two nonzero dimensions");
+    }
+
+    FfxDimensions2D mvDepthLane = contextDescription->mvDepthSize;
+    if (useDerivedMvDepthLane)
+    {
+        mvDepthLane =
+            ffxNfruDeriveResolutionPlan(contextDescription->resolution, contextDescription->maxRenderSize, FFX_FRAMEINTERPOLATION_DATA_GRAPH_ALIGNMENT)
+                .mvDepthLane;
+    }
+    if (!mvDepthLane.width || !mvDepthLane.height || mvDepthLane.width > maxShaderDimension || mvDepthLane.height > maxShaderDimension)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "context creation requires positive mvDepthSize dimensions within the shader range");
     }
 
     // ensure the context is large enough for the internal context.
@@ -746,8 +886,52 @@ FfxErrorCode ffxOpticalFlowContextCreate(FfxOpticalFlowContext* context, FfxOpti
     // create the context.
     OpticalFlowContext_Private* contextPrivate = (OpticalFlowContext_Private*)(context);
     const FfxErrorCode          errorCode      = opticalFlowVkCreate(contextPrivate, contextDescription);
+    if (errorCode == FFX_OK && mvDepthInputSize)
+    {
+        contextPrivate->mvDepthInputSize = *mvDepthInputSize;
+    }
+    if (errorCode != FFX_OK)
+    {
+        ffxLogError(errorCode, "context creation");
+        (void)opticalFlowVkRelease(contextPrivate);
+    }
 
     return errorCode;
+}
+
+FfxErrorCode ffxOpticalFlowContextCreate(FfxOpticalFlowContext* context, FfxOpticalFlowContextDescription* contextDescription)
+{
+    return opticalFlowContextCreateInternal(context, contextDescription, nullptr);
+}
+
+FFX_API FfxErrorCode ffxOpticalFlowContextCreateForFrameGeneration(FfxOpticalFlowContext* context, FfxOpticalFlowContextDescription* contextDescription)
+{
+    FfxScopedLogSuppression suppression;
+    return ffxOpticalFlowContextCreate(context, contextDescription);
+}
+
+FFX_API FfxErrorCode ffxOpticalFlowContextCreateForFrameGenerationWithDepthInput(FfxOpticalFlowContext*            context,
+                                                                                 FfxOpticalFlowContextDescription* contextDescription,
+                                                                                 FfxDimensions2D                   mvDepthInputSize)
+{
+    FfxScopedLogSuppression suppression;
+    return opticalFlowContextCreateInternal(context, contextDescription, &mvDepthInputSize);
+}
+
+FfxErrorCode ffxOpticalFlowContextGetGpuMemoryUsage(FfxOpticalFlowContext* context, FfxEffectMemoryUsage* vramUsage)
+{
+    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(vramUsage, FFX_ERROR_INVALID_POINTER);
+
+    OpticalFlowContext_Private* contextPrivate = (OpticalFlowContext_Private*)(context);
+    FFX_RETURN_ON_ERROR(contextPrivate->device, FFX_ERROR_NULL_DEVICE);
+    FFX_RETURN_ON_ERROR(contextPrivate->contextDescription.backendInterface.fpGetEffectGpuMemoryUsage, FFX_ERROR_INCOMPLETE_INTERFACE);
+
+    const FfxErrorCode errorCode = contextPrivate->contextDescription.backendInterface.fpGetEffectGpuMemoryUsage(
+        &contextPrivate->contextDescription.backendInterface, contextPrivate->effectContextId, vramUsage);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
+
+    return FFX_OK;
 }
 
 FfxErrorCode ffxOpticalFlowContextDestroy(FfxOpticalFlowContext* context)
@@ -757,7 +941,14 @@ FfxErrorCode ffxOpticalFlowContextDestroy(FfxOpticalFlowContext* context)
     // destroy the context.
     OpticalFlowContext_Private* contextPrivate = (OpticalFlowContext_Private*)(context);
     const FfxErrorCode          errorCode      = opticalFlowVkRelease(contextPrivate);
-    return errorCode;
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
+    return FFX_OK;
+}
+
+FFX_API FfxErrorCode ffxOpticalFlowContextDestroyForFrameGeneration(FfxOpticalFlowContext* context)
+{
+    FfxScopedLogSuppression suppression;
+    return ffxOpticalFlowContextDestroy(context);
 }
 
 FfxOpticalFlowGridSize ffxGetDefaultDataGraphOpticalFlowGridSize(FfxInterface& backendInterface)
@@ -831,8 +1022,8 @@ FFX_API FfxErrorCode ffxOpticalFlowGetSharedResourceDescriptions(FfxOpticalFlowC
     SharedResources->depthTm1          = {FFX_HEAP_TYPE_DEFAULT,
                                  {FFX_RESOURCE_TYPE_TEXTURE2D,
                                   FFX_SURFACE_FORMAT_R32_FLOAT,
-                                  contextPrivate->contextDescription.maxRenderSize.width,
-                                  contextPrivate->contextDescription.maxRenderSize.height,
+                                  contextPrivate->contextDescription.mvDepthSize.width,
+                                  contextPrivate->contextDescription.mvDepthSize.height,
                                   1,
                                   1,
                                   FFX_RESOURCE_FLAGS_NONE,
@@ -859,8 +1050,22 @@ FFX_API FfxErrorCode ffxOpticalFlowGetSharedResourceDescriptions(FfxOpticalFlowC
     return FFX_OK;
 }
 
-FfxErrorCode ffxOpticalFlowContextDispatch(FfxOpticalFlowContext* context, FfxOpticalFlowDispatchDescription* dispatchParams)
+FFX_API FfxErrorCode ffxOpticalFlowGetSharedResourceDescriptionsForFrameGeneration(FfxOpticalFlowContext*                    context,
+                                                                                   FfxOpticalFlowSharedResourceDescriptions* sharedResources)
 {
+    FfxScopedLogSuppression suppression;
+    return ffxOpticalFlowGetSharedResourceDescriptions(context, sharedResources);
+}
+
+FFX_API FfxErrorCode ffxOpticalFlowContextDispatchWithTrace(FfxOpticalFlowContext*             context,
+                                                            FfxOpticalFlowDispatchDescription* dispatchParams,
+                                                            FfxNfruOpticalFlowTrace*           trace)
+{
+    FfxScopedLogSuppression suppression(trace != nullptr);
+    if (trace)
+    {
+        *trace = {FfxNfruOfStage::Validation};
+    }
     FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
     FFX_RETURN_ON_ERROR(dispatchParams, FFX_ERROR_INVALID_POINTER);
     FFX_RETURN_ON_ERROR(dispatchParams->commandList, FFX_ERROR_INVALID_POINTER);
@@ -877,8 +1082,34 @@ FfxErrorCode ffxOpticalFlowContextDispatch(FfxOpticalFlowContext* context, FfxOp
     FFX_RETURN_ON_ERROR(dispatchParams->color.description.width == contextPrivate->contextDescription.resolution.width, FFX_ERROR_INVALID_ARGUMENT);
     FFX_RETURN_ON_ERROR(dispatchParams->color.description.height == contextPrivate->contextDescription.resolution.height, FFX_ERROR_INVALID_ARGUMENT);
 
-    const FfxErrorCode errorCode = ArmOpticalFlowDispatch(contextPrivate, dispatchParams);
+    if (contextPrivate->useMVHints)
+    {
+        const FfxDimensions2D inputSize    = contextPrivate->mvDepthInputSize;
+        const FfxDimensions2D laneSize     = contextPrivate->contextDescription.mvDepthSize;
+        const bool            depthMatches = dispatchParams->depth.description.type == FFX_RESOURCE_TYPE_TEXTURE2D &&
+                                  dispatchParams->depth.description.width == inputSize.width && dispatchParams->depth.description.height == inputSize.height;
+        const bool previousDepthMatches =
+            dispatchParams->depthTm1.description.type == FFX_RESOURCE_TYPE_TEXTURE2D &&
+            ((dispatchParams->depthTm1.description.width == inputSize.width && dispatchParams->depthTm1.description.height == inputSize.height) ||
+             (dispatchParams->depthTm1.description.width == laneSize.width && dispatchParams->depthTm1.description.height == laneSize.height));
+        if (!depthMatches || !previousDepthMatches)
+        {
+            return ffxLogError(FFX_ERROR_INVALID_ARGUMENT,
+                               "depth must match the input size and depthTm1 must match the input or resolved lane when hints are enabled");
+        }
+    }
+
+    const FfxErrorCode errorCode = ArmOpticalFlowDispatch(contextPrivate, dispatchParams, trace);
+    if (errorCode != FFX_OK && !trace)
+    {
+        return ffxLogError(errorCode, "dispatch");
+    }
     return errorCode;
+}
+
+FfxErrorCode ffxOpticalFlowContextDispatch(FfxOpticalFlowContext* context, FfxOpticalFlowDispatchDescription* dispatchParams)
+{
+    return ffxOpticalFlowContextDispatchWithTrace(context, dispatchParams, nullptr);
 }
 
 FfxDimensions2D ffxOpticalFlowGetSize(FfxOpticalFlowContext* context)

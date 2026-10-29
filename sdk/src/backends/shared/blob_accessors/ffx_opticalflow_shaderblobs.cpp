@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include <FidelityFX/host/ffx_util.h>
 #include "ffx_opticalflow_shaderblobs.h"
@@ -23,8 +25,8 @@ static FfxShaderBlob opticalflowGetComputeMotionFromDepthPassPermutationBlobByIn
 
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
 
-    const bool useFragmentJob = FFX_CONTAINS_FLAG(permutationOptions, OPTICALFLOW_SHADER_PERMUTATION_MV_HINTS_FRAGMENT);
-    if (useFragmentJob)
+    const bool useComputeJob = FFX_CONTAINS_FLAG(permutationOptions, OPTICALFLOW_SHADER_PERMUTATION_MV_HINTS_COMPUTE);
+    if (!useComputeJob)
     {
         const int32_t tableIndex = g_ffx_opticalflow_mv_hints_fs_IndirectionTable[key.index];
         return POPULATE_SHADER_BLOB_FFX(g_ffx_opticalflow_mv_hints_fs_PermutationInfo, tableIndex);

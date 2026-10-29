@@ -18,426 +18,395 @@
 #include "dataset_loader.h"
 
 #include <algorithm>
-#include <cassert>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
-#include <tinyexr/tinyexr.h>
-
-// nlohmann/json — available via tinygltf (framework → third_party → tinygltf → json.hpp).
+// nlohmann/json is available through tinygltf (framework -> third_party -> tinygltf -> json.hpp).
 #include <json.hpp>
 using json = nlohmann::json;
 
+#include "common/exr_image.h"
 #include "core/util/logging.hpp"
 
-// ──────────────────────────────────────────────────────────────────────────────
-// float_to_half — IEEE 754 float32 → float16
-// ──────────────────────────────────────────────────────────────────────────────
-
-static uint16_t float_to_half(float f)
+bool NFRUDatasetLoader::init(vkb::core::DeviceC &device,
+                             const std::string &dataset_dir, const std::string &dataset_sequence,
+                             uint32_t swapchain_count)
 {
-    uint32_t x;
-    std::memcpy(&x, &f, sizeof(f));  // reinterpret bits as uint32_t
-
-    uint32_t sign     = (x >> 31) & 0x1;
-    int32_t  exp      = ((x >> 23) & 0xFF) - 127;  // float32 exponent
-    uint32_t mantissa = x & 0x7FFFFF;              // float32 mantissa
-
-    uint16_t h = 0;
-
-    if (exp == 128)
-    {  // Inf or NaN
-        h = (sign << 15) | (0x1F << 10) | (mantissa ? 0x200 : 0);
-    }
-    else if (exp > 15)
-    {  // Overflow → saturate to Inf
-        h = (sign << 15) | (0x1F << 10);
-    }
-    else if (exp >= -14)
-    {                     // Normalized half-float
-        exp += 15;        // adjust bias from 127→15
-        mantissa >>= 13;  // shift 23-bit mantissa to 10 bits
-        h = (sign << 15) | (exp << 10) | mantissa;
-    }
-    else if (exp >= -24)
-    {                          // Subnormal half-float
-        mantissa |= 0x800000;  // restore implicit leading 1
-        int shift = -14 - exp;
-        mantissa >>= (13 + shift);
-        h = (sign << 15) | mantissa;
-    }
-    else
-    {  // Underflow → zero
-        h = sign << 15;
-    }
-
-    return h;
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// EXR helpers
-// ──────────────────────────────────────────────────────────────────────────────
-
-static VkExtent2D exr_extent(const char *path)
-{
-	EXRVersion  version = {};
-	EXRHeader   header  = {};
-	const char *err     = nullptr;
-
-	if (ParseEXRVersionFromFile(&version, path) != TINYEXR_SUCCESS)
-		return {0, 0};
-	if (ParseEXRHeaderFromFile(&header, &version, path, &err) != TINYEXR_SUCCESS)
+	const std::string config_path = dataset_dir + "/config.json";
+	if (!std::filesystem::exists(config_path))
 	{
-		FreeEXRErrorMessage(err);
-		return {0, 0};
+		LOGI("NFRU dataset config not found; using sample defaults: {}", config_path);
 	}
-	VkExtent2D ext{
-	    static_cast<uint32_t>(header.data_window.max_x - header.data_window.min_x + 1),
-	    static_cast<uint32_t>(header.data_window.max_y - header.data_window.min_y + 1)};
-	FreeEXRHeader(&header);
-	return ext;
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Reinhard tonemapping
-// ──────────────────────────────────────────────────────────────────────────────
-static void apply_tonemap(float *pixels, int count)
-{
-	float exposure = std::exp(2.0f);
-
-	for (int i = 0; i < count; i++)
+	else
 	{
-		float r = pixels[i * 4 + 0] * exposure;
-		float g = pixels[i * 4 + 1] * exposure;
-		float b = pixels[i * 4 + 2] * exposure;
-		r = r / (1.0f + r);
-		g = g / (1.0f + g);
-		b = b / (1.0f + b);
-		pixels[i * 4 + 0] = std::fmin(std::fmax(r, 0.0f), 1.0f);
-		pixels[i * 4 + 1] = std::fmin(std::fmax(g, 0.0f), 1.0f);
-		pixels[i * 4 + 2] = std::fmin(std::fmax(b, 0.0f), 1.0f);
-		pixels[i * 4 + 3] = 1.0f;
+		std::ifstream config_stream(config_path);
+		if (!config_stream.is_open())
+		{
+			LOGE("Cannot open NFRU dataset config: {}", config_path);
+			return false;
+		}
+		try
+		{
+			const json root = json::parse(config_stream);
+			if (root.contains("Tonemap"))
+				config_.apply_tonemap = root.at("Tonemap").get<bool>();
+			if (root.contains("FlipDepth"))
+				config_.flip_depth = root.at("FlipDepth").get<bool>();
+			if (root.contains("TransposeViewProjectionOnLoad"))
+				config_.transpose_view_projection = root.at("TransposeViewProjectionOnLoad").get<bool>();
+			if (root.contains("Exposure"))
+			{
+				config_.override_exposure   = true;
+				config_.exposure            = root.at("Exposure").get<float>();
+				if (config_.exposure <= 0.0f)
+				{
+					LOGE("NFRU dataset config Exposure must be greater than zero: {}", config_path);
+					return false;
+				}
+			}
+		}
+		catch (const json::exception &exception)
+		{
+			LOGE("Failed to parse NFRU dataset config {}: {}", config_path, exception.what());
+			return false;
+		}
+		LOGI("Loaded NFRU dataset overrides: {}", config_path);
 	}
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// DatasetLoader implementation
-// ──────────────────────────────────────────────────────────────────────────────
-
-DatasetLoader::~DatasetLoader()
-{
-	for (auto &s : color_staging_) destroy_staging_buffer(s);
-	for (auto &s : depth_staging_) destroy_staging_buffer(s);
-	for (auto &s : mv_staging_)    destroy_staging_buffer(s);
-}
-
-void DatasetLoader::destroy_staging_buffer(StagingBuffer &sb)
-{
-	if (sb.mapped)
-		vkUnmapMemory(device_, sb.memory);
-	if (sb.buffer != VK_NULL_HANDLE)
-		vkDestroyBuffer(device_, sb.buffer, nullptr);
-	if (sb.memory != VK_NULL_HANDLE)
-		vkFreeMemory(device_, sb.memory, nullptr);
-	sb = {};
-}
-
-/// Create a host-visible, host-coherent staging buffer and persistently map it.
-/// Used for CPU→GPU data transfer (EXR pixels → vkCmdCopyBufferToImage).
-DatasetLoader::StagingBuffer DatasetLoader::create_staging_buffer(VkPhysicalDevice gpu, VkDeviceSize size)
-{
-	StagingBuffer sb{};
-
-	VkBufferCreateInfo buf_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-	buf_ci.size        = size;
-	buf_ci.usage       = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;  // CPU writes, GPU reads
-	buf_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	if (vkCreateBuffer(device_, &buf_ci, nullptr, &sb.buffer) != VK_SUCCESS)
-		assert(false && "vkCreateBuffer failed for staging buffer");
-
-	VkMemoryRequirements mem_req{};
-	vkGetBufferMemoryRequirements(device_, sb.buffer, &mem_req);
-
-	VkPhysicalDeviceMemoryProperties mem_props{};
-	vkGetPhysicalDeviceMemoryProperties(gpu, &mem_props);
-
-	uint32_t mem_idx = UINT32_MAX;
-	for (uint32_t j = 0; j < mem_props.memoryTypeCount; ++j)
-	{
-		const bool type_match = (mem_req.memoryTypeBits & (1u << j)) != 0;
-		const bool flag_match = (mem_props.memoryTypes[j].propertyFlags &
-		                         (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-		                        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-		if (type_match && flag_match) { mem_idx = j; break; }
-	}
-	assert(mem_idx != UINT32_MAX && "No host-visible memory type for staging buffer");
-
-	VkMemoryAllocateInfo alloc_ci{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-	alloc_ci.allocationSize  = mem_req.size;
-	alloc_ci.memoryTypeIndex = mem_idx;
-	vkAllocateMemory(device_, &alloc_ci, nullptr, &sb.memory);
-	vkBindBufferMemory(device_, sb.buffer, sb.memory, 0);
-	vkMapMemory(device_, sb.memory, 0, mem_req.size, 0, &sb.mapped);
-
-	return sb;
-}
-
-bool DatasetLoader::init(VkDevice device, VkPhysicalDevice gpu,
-                         const std::string &dataset_dir, const std::string &dataset_sequence,
-                         uint32_t swapchain_count)
-{
-	device_ = device;
-
 	std::string sequence_json = dataset_dir + "/" + dataset_sequence + ".json";
-	color_dir_ = dataset_dir + "/ground_truth/" + dataset_sequence;
-	depth_dir_ = dataset_dir + "/x2/depth/" + dataset_sequence;
-	mv_dir_    = dataset_dir + "/x2/motion_m2/" + dataset_sequence;
+	color_dir_                = dataset_dir + "/ground_truth/" + dataset_sequence;
+	depth_dir_                = dataset_dir + "/x2/depth/" + dataset_sequence;
+	motion_dir_               = dataset_dir + "/x2/motion_m2/" + dataset_sequence;
 	// Fall back to motion_t-2 when motion_m2 is absent.
-	if (!std::filesystem::exists(mv_dir_))
-		mv_dir_ = dataset_dir + "/x2/motion_t-2/" + dataset_sequence;
+	if (!std::filesystem::exists(motion_dir_))
+		motion_dir_ = dataset_dir + "/x2/motion_t-2/" + dataset_sequence;
+
+	if (!std::filesystem::is_directory(color_dir_))
+	{
+		LOGE("Missing NFRU dataset color directory: {}", color_dir_);
+		return false;
+	}
+	if (!std::filesystem::is_directory(depth_dir_))
+	{
+		LOGE("Missing NFRU dataset depth directory: {}", depth_dir_);
+		return false;
+	}
+	if (!std::filesystem::is_directory(motion_dir_))
+	{
+		LOGE("Missing NFRU dataset motion directory: {}", motion_dir_);
+		return false;
+	}
 
 	LOGI("DatasetLoader: dir={}, sequence={}", dataset_dir, dataset_sequence);
 	LOGI("  color_dir = {}", color_dir_);
 	LOGI("  depth_dir = {}", depth_dir_);
-	LOGI("  mv_dir    = {}", mv_dir_);
+	LOGI("  motion_dir = {}", motion_dir_);
+	const std::string exposure_source = config_.override_exposure ? std::to_string(config_.exposure) : "sequence JSON";
+	LOGI("  options: tonemap={}, exposure={}, flipDepth={}, transposeViewProjectionOnLoad={}",
+	     config_.apply_tonemap, exposure_source, config_.flip_depth,
+	     config_.transpose_view_projection);
 
-	std::ifstream ifs(sequence_json);
-	if (!ifs.is_open())
+	std::ifstream sequence_stream(sequence_json);
+	if (!sequence_stream.is_open())
 	{
 		LOGE("Cannot open sequence JSON: {}", sequence_json);
 		return false;
 	}
 
-	json root = json::parse(ifs);
-	fps_      = root.value("EmulatedFramerate", 60.0f);
-	// The current dataset bundle always stores depth in the same pre-inverted
-	// convention handled below, so ReverseZ does not currently change the load path. 
-	reverse_z_ = root.value("ReverseZ", false);
+	char path_buffer[512];
+	snprintf(path_buffer, sizeof(path_buffer), "%s/%04d.exr", color_dir_.c_str(), 0);
+	const bool display_extent_loaded = vkb::sample::exr::probe_extent(path_buffer, display_size_);
+	snprintf(path_buffer, sizeof(path_buffer), "%s/%04d.exr", depth_dir_.c_str(), 0);
+	const bool render_extent_loaded = vkb::sample::exr::probe_extent(path_buffer, render_size_);
 
-	auto &json_frames = root["Frames"];
-	frames_.resize(json_frames.size());
-
-	for (size_t i = 0; i < json_frames.size(); i++)
-	{
-		auto &json_frame = json_frames[i];
-		auto &frame_data = frames_[i];
-
-		frame_data.fovY       = json_frame.value("FovY", 0.75f);
-		frame_data.cameraNear = json_frame.value("CameraNearPlane", 10.0f);
-		float farVal  = json_frame.value("CameraFarPlane", -1.0f);
-		frame_data.cameraFar  = (farVal < 0) ? 5000.0f : farVal;
-
-		if (json_frame.contains("NormalizedPerRatioJitter") && json_frame["NormalizedPerRatioJitter"].size() > 0)
-		{
-			frame_data.jitterX = json_frame["NormalizedPerRatioJitter"][0].value("X", 0.0f);
-			frame_data.jitterY = json_frame["NormalizedPerRatioJitter"][0].value("Y", 0.0f);
-		}
-
-		auto &vp_arr = json_frame["ViewProjection"];
-
-		// Column-major → row-major transpose
-		frame_data.viewProjection[0]  = vp_arr[0].get<float>();
-		frame_data.viewProjection[1]  = vp_arr[4].get<float>();
-		frame_data.viewProjection[2]  = vp_arr[8].get<float>();
-		frame_data.viewProjection[3]  = vp_arr[12].get<float>();
-		frame_data.viewProjection[4]  = vp_arr[1].get<float>();
-		frame_data.viewProjection[5]  = vp_arr[5].get<float>();
-		frame_data.viewProjection[6]  = vp_arr[9].get<float>();
-		frame_data.viewProjection[7]  = vp_arr[13].get<float>();
-		frame_data.viewProjection[8]  = vp_arr[2].get<float>();
-		frame_data.viewProjection[9]  = vp_arr[6].get<float>();
-		frame_data.viewProjection[10] = vp_arr[10].get<float>();
-		frame_data.viewProjection[11] = vp_arr[14].get<float>();
-		frame_data.viewProjection[12] = vp_arr[3].get<float>();
-		frame_data.viewProjection[13] = vp_arr[7].get<float>();
-		frame_data.viewProjection[14] = vp_arr[11].get<float>();
-		frame_data.viewProjection[15] = vp_arr[15].get<float>();
-
-	}
-
-	LOGI("Parsed sequence: {} frames, {}fps, reverseZ={}", frames_.size(), fps_, reverse_z_);
-
-	char path_buf[512];
-	snprintf(path_buf, sizeof(path_buf), "%s/%04d.exr", color_dir_.c_str(), 0);
-	display_size_ = exr_extent(path_buf);
-	snprintf(path_buf, sizeof(path_buf), "%s/%04d.exr", depth_dir_.c_str(), 0);
-	render_size_ = exr_extent(path_buf);
-
-	if (display_size_.width == 0 || render_size_.width == 0)
+	if (!display_extent_loaded || !render_extent_loaded || display_size_.width == 0 || render_size_.width == 0)
 	{
 		LOGE("Failed to probe EXR dimensions (color: {}x{}, depth: {}x{})",
 		     display_size_.width, display_size_.height, render_size_.width, render_size_.height);
 		return false;
 	}
 
+	try
+	{
+		const json root = json::parse(sequence_stream);
+		frame_rate_hz_  = root.value("EmulatedFramerate", 60.0f);
+		depth_inverted_ = root.value("ReverseZ", false) ^ config_.flip_depth;
+
+		const float root_near = root.value("NearPlane", 10.0f);
+		const float root_far  = root.value("FarPlane", -1.0f);
+
+		if (!root.contains("Frames") || !root["Frames"].is_array() || root["Frames"].empty())
+		{
+			LOGE("NFRU dataset sequence has no Frames array: {}", sequence_json);
+			return false;
+		}
+		const auto &json_frames = root["Frames"];
+		frames_.resize(json_frames.size());
+		const bool has_frame_indices = json_frames[0].contains("Frame");
+		std::vector<bool> frame_seen(json_frames.size(), false);
+		bool depth_convention_initialized = false;
+
+		for (size_t frame_index = 0; frame_index < json_frames.size(); ++frame_index)
+		{
+			const auto &json_frame = json_frames[frame_index];
+			if (json_frame.contains("Frame") != has_frame_indices || (has_frame_indices && !json_frame["Frame"].is_number_unsigned()))
+			{
+				LOGE("NFRU sequence has inconsistent Frame metadata at entry {}: {}", frame_index, sequence_json);
+				return false;
+			}
+			const size_t metadata_frame_index = has_frame_indices ? json_frame["Frame"].get<size_t>() : frame_index;
+			if (metadata_frame_index >= frames_.size() || frame_seen[metadata_frame_index])
+			{
+				LOGE("NFRU sequence has duplicate or out-of-range Frame index {}: {}", metadata_frame_index, sequence_json);
+				return false;
+			}
+			frame_seen[metadata_frame_index] = true;
+			auto       &frame_data = frames_[metadata_frame_index];
+			const float default_frame_time_delta = (frame_rate_hz_ > 0) ? (1000.0f / frame_rate_hz_) : 1.0f;
+			frame_data.frame_time_delta_ms       = (default_frame_time_delta > 1.0f) ? default_frame_time_delta : 1.0f;
+			frame_data.motion_vector_scale_x     = -static_cast<float>(render_size_.width);
+			frame_data.motion_vector_scale_y     = -static_cast<float>(render_size_.height);
+			frame_data.view_space_to_meters_factor = 1.0f;
+			frame_data.reset              = json_frame.value("Reset", metadata_frame_index == 0) || metadata_frame_index == 0;
+			frame_data.fov_y                = json_frame.value("FovY", 0.75f);
+			frame_data.camera_near          = json_frame.value("CameraNearPlane", root_near);
+			const float camera_far          = json_frame.value("CameraFarPlane", root_far);
+			frame_data.camera_far           = camera_far < 0.0f ? FLT_MAX : camera_far;
+			const bool frame_depth_infinite = camera_far < 0.0f;
+			if (!depth_convention_initialized)
+			{
+				depth_infinite_              = frame_depth_infinite;
+				depth_convention_initialized = true;
+			}
+			else if (frame_depth_infinite != depth_infinite_)
+			{
+				LOGE("NFRU sequence mixes finite and infinite CameraFarPlane values at frame {}: {}", frame_index, sequence_json);
+				return false;
+			}
+			frame_data.exposure = config_.override_exposure ? config_.exposure : json_frame.value("Exposure", 1.0f);
+			if (json_frame.contains("FrameTimeDelta"))
+			{
+				frame_data.frame_time_delta_ms = json_frame["FrameTimeDelta"].get<float>();
+				if (!std::isfinite(frame_data.frame_time_delta_ms) || frame_data.frame_time_delta_ms < 1.0f)
+				{
+					LOGE("NFRU frame {} has invalid FrameTimeDelta (must be finite and at least 1 ms): {}", metadata_frame_index, sequence_json);
+					return false;
+				}
+			}
+			if (json_frame.contains("ViewSpaceToMetersFactor"))
+			{
+				frame_data.view_space_to_meters_factor = json_frame["ViewSpaceToMetersFactor"].get<float>();
+				if (!std::isfinite(frame_data.view_space_to_meters_factor))
+				{
+					LOGE("NFRU frame {} has invalid ViewSpaceToMetersFactor: {}", metadata_frame_index, sequence_json);
+					return false;
+				}
+			}
+			if (json_frame.contains("MotionVectorScale"))
+			{
+				const auto &motion_vector_scale = json_frame["MotionVectorScale"];
+				if (!motion_vector_scale.is_array() || motion_vector_scale.size() != 2 ||
+				    !motion_vector_scale[0].is_number() || !motion_vector_scale[1].is_number())
+				{
+					LOGE("NFRU sequence has invalid MotionVectorScale at frame {} (expected two finite numbers): {}", frame_index, sequence_json);
+					return false;
+				}
+				frame_data.motion_vector_scale_x = motion_vector_scale[0].get<float>();
+				frame_data.motion_vector_scale_y = motion_vector_scale[1].get<float>();
+				if (!std::isfinite(frame_data.motion_vector_scale_x) || !std::isfinite(frame_data.motion_vector_scale_y))
+				{
+					LOGE("NFRU sequence has non-finite MotionVectorScale at frame {}: {}", frame_index, sequence_json);
+					return false;
+				}
+			}
+			if (frame_data.exposure <= 0.0f)
+			{
+				LOGE("NFRU sequence has invalid Exposure at frame {} (must be greater than zero): {}", frame_index, sequence_json);
+				return false;
+			}
+
+			if (!json_frame.contains("ViewProjection") || !json_frame["ViewProjection"].is_array() || json_frame["ViewProjection"].size() != 16)
+			{
+				LOGE("NFRU frame {} has invalid ViewProjection in {}", frame_index, sequence_json);
+				return false;
+			}
+			const auto &view_projection = json_frame["ViewProjection"];
+			for (int index = 0; index < 16; ++index)
+			{
+				const int destination                   = config_.transpose_view_projection ? (index % 4) * 4 + index / 4 : index;
+				frame_data.view_projection[destination] = view_projection[index].get<float>();
+			}
+
+			if (json_frame.contains("NormalizedPerRatioJitter") && !json_frame["NormalizedPerRatioJitter"].empty())
+			{
+				const auto &jitter  = json_frame["NormalizedPerRatioJitter"][0];
+				frame_data.jitter_x = jitter.value("X", 0.0f);
+				frame_data.jitter_y = jitter.value("Y", 0.0f);
+			}
+		}
+	}
+	catch (const json::exception &exception)
+	{
+		LOGE("Failed to parse NFRU sequence JSON '{}': {}", sequence_json, exception.what());
+		return false;
+	}
+
+	LOGI("Parsed sequence: {} frames, {}fps, depthInverted={}, depthInfinite={}",
+	     frames_.size(), frame_rate_hz_, depth_inverted_, depth_infinite_);
+	LOGI("  camera planes: near={}, far={} (infinite far uses SDK encoding)",
+	     frames_[0].camera_near, frames_[0].camera_far);
+
 	LOGI("  display_size = {}x{}, render_size = {}x{}",
 	     display_size_.width, display_size_.height, render_size_.width, render_size_.height);
 
+	size_t color_bytes = 0;
+	size_t depth_bytes = 0;
+	size_t mv_bytes    = 0;
+	if (!vkb::sample::exr::vk_format_buffer_size(display_size_, VK_FORMAT_R8G8B8A8_UNORM, color_bytes) ||
+	    !vkb::sample::exr::vk_format_buffer_size(render_size_, VK_FORMAT_R32_SFLOAT, depth_bytes) ||
+	    !vkb::sample::exr::vk_format_buffer_size(render_size_, VK_FORMAT_R16G16_SFLOAT, mv_bytes))
 	{
-		VkDeviceSize color_bytes = static_cast<VkDeviceSize>(display_size_.width)
-		                         * display_size_.height * 4;   // R8G8B8A8
-		VkDeviceSize depth_bytes = static_cast<VkDeviceSize>(render_size_.width)
-		                         * render_size_.height * 4;   // R32F
-		VkDeviceSize mv_bytes    = static_cast<VkDeviceSize>(render_size_.width)
-		                         * render_size_.height * 4;   // R16G16
-
-		color_staging_.resize(swapchain_count);
-		depth_staging_.resize(swapchain_count);
-		mv_staging_.resize(swapchain_count);
-
-		for (uint32_t i = 0; i < swapchain_count; ++i)
-		{
-			color_staging_[i] = create_staging_buffer(gpu, color_bytes);
-			depth_staging_[i] = create_staging_buffer(gpu, depth_bytes);
-			mv_staging_[i]    = create_staging_buffer(gpu, mv_bytes);
-		}
-		LOGI("Created {} x 3 staging buffers (color={}, depth={}, mv={} bytes)",
-		     swapchain_count, color_bytes, depth_bytes, mv_bytes);
+		LOGE("Unsupported NFRU dataset image format");
+		return false;
 	}
+
+	staging_buffers_.resize(swapchain_count);
+	for (StagingBuffers &staging : staging_buffers_)
+	{
+		staging.color          = std::make_unique<vkb::core::BufferC>(vkb::core::BufferC::create_staging_buffer(device, color_bytes, nullptr));
+		staging.depth          = std::make_unique<vkb::core::BufferC>(vkb::core::BufferC::create_staging_buffer(device, depth_bytes, nullptr));
+		staging.motion_vectors = std::make_unique<vkb::core::BufferC>(vkb::core::BufferC::create_staging_buffer(device, mv_bytes, nullptr));
+	}
+	LOGI("Created {} NFRU dataset staging triplets (color={}, depth={}, mv={} bytes)",
+	     swapchain_count, color_bytes, depth_bytes, mv_bytes);
 
 	return true;
 }
 
-int DatasetLoader::total_frames() const
+uint64_t NFRUDatasetLoader::total_frames() const
 {
-	return static_cast<int>((frames_.size() + 1) / 2);
+	return static_cast<uint64_t>((frames_.size() + 1) / 2);
 }
 
-bool DatasetLoader::get_frame_params(int frame, FrameParams &out) const
+// Returns the source-frame index represented by the interpolated output.
+int NFRUDatasetLoader::interpolated_source_frame(int frame_index) const
 {
-	int even_frame = frame * 2;
-	if (even_frame < 0 || even_frame >= static_cast<int>(frames_.size()))
+	return frame_index * 2 - 1;
+}
+
+bool NFRUDatasetLoader::get_frame_params(int frame_index, NFRUFrameParams &frame_params) const
+{
+	const int source_frame_index = frame_index * 2;
+	if (source_frame_index < 0 || source_frame_index >= static_cast<int>(frames_.size()))
 		return false;
 
-	const auto &frame_data = frames_[even_frame];
-	std::memcpy(out.viewProjection, frame_data.viewProjection, sizeof(out.viewProjection));
-	out.jitterX                = frame_data.jitterX * static_cast<float>(render_size_.width);
-	out.jitterY                = frame_data.jitterY * static_cast<float>(render_size_.height);
-	out.cameraNear             = frame_data.cameraNear;
-	out.cameraFar              = frame_data.cameraFar;
-	out.cameraFovAngleVertical = frame_data.fovY;
-	float deltaTimeMS = (fps_ > 0) ? (1000.0f / fps_) : 1.0f;
-	out.frameTimeDelta         = (deltaTimeMS > 1.0f) ? deltaTimeMS : 1.0f;
-	out.motionVectorScaleX     = 1.0f;   // Dataset MVs are pre-multiplied by extent
-	out.motionVectorScaleY     = 1.0f;
-
+	const auto &metadata = frames_[source_frame_index];
+	frame_params.reset    = metadata.reset;
+	std::memcpy(frame_params.view_projection, metadata.view_projection, sizeof(frame_params.view_projection));
+	frame_params.jitter_x                  = metadata.jitter_x * static_cast<float>(render_size_.width);
+	frame_params.jitter_y                  = metadata.jitter_y * static_cast<float>(render_size_.height);
+	frame_params.camera_near               = metadata.camera_near;
+	frame_params.camera_far                = metadata.camera_far;
+	frame_params.camera_fov_angle_vertical = metadata.fov_y;
+	frame_params.frame_time_delta_ms       = metadata.frame_time_delta_ms;
+	frame_params.motion_vector_scale_x     = metadata.motion_vector_scale_x;
+	frame_params.motion_vector_scale_y     = metadata.motion_vector_scale_y;
+	frame_params.view_space_to_meters_factor = metadata.view_space_to_meters_factor > 0.0f ?
+	                                               metadata.view_space_to_meters_factor :
+	                                               1.0f;
 	return true;
 }
 
-bool DatasetLoader::load_frame(int frame, uint32_t swapchain_index, FrameParams &out)
+bool NFRUDatasetLoader::load_frame(int frame_index, uint32_t swapchain_index, NFRUFrameParams &frame_params)
 {
-	int even_frame = frame * 2;
-	if (even_frame < 0 || even_frame >= static_cast<int>(frames_.size()))
+	const int source_frame_index = frame_index * 2;
+	if (source_frame_index < 0 || source_frame_index >= static_cast<int>(frames_.size()))
 		return false;
 
-	const int display_pixels = static_cast<int>(display_size_.width) * static_cast<int>(display_size_.height);
-	const int render_pixels = static_cast<int>(render_size_.width) * static_cast<int>(render_size_.height);
+	auto &staging = staging_buffers_[swapchain_index];
+	char  path_buffer[512];
+	auto  load_image = [&](const char *kind, VkExtent2D expected_extent, VkFormat format,
+                          const vkb::sample::exr::ExrLoadOptions &options,
+                          void *destination, size_t destination_size) {
+        VkExtent2D extent{};
+        if (!vkb::sample::exr::load_exr_to_vk_format(path_buffer, format, options, destination, destination_size, extent))
+            return false;
+        if (extent.width == expected_extent.width && extent.height == expected_extent.height)
+            return true;
+        LOGE("NFRU {} EXR has size {}x{}, expected {}x{}: {}",
+		      kind, extent.width, extent.height, expected_extent.width, expected_extent.height, path_buffer);
+        return false;
+	};
 
-	// ── 1. Load color (display resolution, float RGBA → tonemap → u8) ──
+	// Pack display-resolution HDR color into R8G8B8A8_UNORM.
 	{
-		char path[512];
-		snprintf(path, sizeof(path), "%s/%04d.exr", color_dir_.c_str(), even_frame);
+		snprintf(path_buffer, sizeof(path_buffer), "%s/%04d.exr", color_dir_.c_str(), source_frame_index);
 
-		int         w, h;
-		const char *err = nullptr;
-		float      *tmp = nullptr;
-		if (LoadEXR(&tmp, &w, &h, path, &err) != TINYEXR_SUCCESS)
-		{
-			LOGE("Failed to load color EXR: {} — {}", path, err ? err : "unknown");
-			FreeEXRErrorMessage(err);
+		vkb::sample::exr::ExrLoadOptions color_options{};
+		color_options.tonemap             = config_.apply_tonemap;
+		color_options.exposure            = frames_[source_frame_index].exposure;
+		if (!load_image("color", display_size_, VK_FORMAT_R8G8B8A8_UNORM, color_options,
+		                staging.color->map(), static_cast<size_t>(staging.color->get_size())))
 			return false;
-		}
-		apply_tonemap(tmp, display_pixels);
-
-		// Convert f32 RGBA → u8 RGBA directly into staging buffer
-		auto *dst = static_cast<uint8_t *>(color_staging_[swapchain_index].mapped);
-		for (int i = 0; i < display_pixels; ++i)
-		{
-			dst[i * 4 + 0] = static_cast<uint8_t>(std::fmin(tmp[i * 4 + 0], 1.0f) * 255.0f + 0.5f);
-			dst[i * 4 + 1] = static_cast<uint8_t>(std::fmin(tmp[i * 4 + 1], 1.0f) * 255.0f + 0.5f);
-			dst[i * 4 + 2] = static_cast<uint8_t>(std::fmin(tmp[i * 4 + 2], 1.0f) * 255.0f + 0.5f);
-			dst[i * 4 + 3] = static_cast<uint8_t>(std::fmin(tmp[i * 4 + 3], 1.0f) * 255.0f + 0.5f);
-		}
-		free(tmp);
+		staging.color->flush();
 	}
 
-	// ── 2. Load depth (render resolution, R32F) ──
+	// Pack render-resolution depth into the R32_SFLOAT staging buffer.
 	{
-		char path[512];
-		snprintf(path, sizeof(path), "%s/%04d.exr", depth_dir_.c_str(), even_frame);
+		snprintf(path_buffer, sizeof(path_buffer), "%s/%04d.exr", depth_dir_.c_str(), source_frame_index);
 
-		int         w, h;
-		const char *err = nullptr;
-		float      *tmp = nullptr;
-		if (LoadEXR(&tmp, &w, &h, path, &err) != TINYEXR_SUCCESS)
-		{
-			LOGE("Failed to load depth EXR: {} — {}", path, err ? err : "unknown");
-			FreeEXRErrorMessage(err);
+		vkb::sample::exr::ExrLoadOptions depth_options{};
+		depth_options.flip_depth = config_.flip_depth;
+		if (!load_image("depth", render_size_, VK_FORMAT_R32_SFLOAT, depth_options,
+		                staging.depth->map(), static_cast<size_t>(staging.depth->get_size())))
 			return false;
-		}
-		auto *dst = static_cast<float *>(depth_staging_[swapchain_index].mapped);
-		for (int i = 0; i < w * h; i++)
-		{
-			float d = tmp[i * 4 + 0];
-			// The replay datasets store depth as (1 - z). NFRU is configured with
-			// ENABLE_DEPTH_INVERTED and expects the usual reversed-Z depth value, so
-			// convert the dataset back into that convention before uploading.
-			d = 1.0f - d;
-			dst[i] = d;
-		}
-		free(tmp);
+		staging.depth->flush();
 	}
 
-	// ── 3. Load motion vectors (render resolution, RG → half) ──
-	//    LoadEXR always returns interleaved RGBA float32; channel 0 = R (X), channel 1 = G (Y).
+	// Pack render-resolution motion into the R16G16_SFLOAT staging buffer.
 	{
-		char path[512];
-		snprintf(path, sizeof(path), "%s/%04d.exr", mv_dir_.c_str(), even_frame);
+		snprintf(path_buffer, sizeof(path_buffer), "%s/%04d.exr", motion_dir_.c_str(), source_frame_index);
 
-		int         w, h;
-		const char *err = nullptr;
-		float      *tmp = nullptr;
-
-		if (LoadEXR(&tmp, &w, &h, path, &err) == TINYEXR_SUCCESS)
-		{
-			auto       *dst = static_cast<uint16_t *>(mv_staging_[swapchain_index].mapped);
-			const float wf  = static_cast<float>(render_size_.width);
-			const float hf  = static_cast<float>(render_size_.height);
-
-			for (int i = 0; i < render_pixels; i++)
-			{
-				dst[i * 2 + 0] = float_to_half(tmp[i * 4 + 0] * -1.0f * wf);
-				dst[i * 2 + 1] = float_to_half(tmp[i * 4 + 1] * -1.0f * hf);
-			}
-			free(tmp);
-		}
-		else
-		{
-			LOGW("Failed to load MV EXR: {} — {} → zero-filling", path, err ? err : "unknown");
-			FreeEXRErrorMessage(err);
-			// No MV available for this frame → zero fill staging
-			std::memset(mv_staging_[swapchain_index].mapped, 0,
-			            static_cast<size_t>(render_pixels) * 4);
-		}
+		if (!load_image("motion", render_size_, VK_FORMAT_R16G16_SFLOAT, {},
+		                staging.motion_vectors->map(), static_cast<size_t>(staging.motion_vectors->get_size())))
+			return false;
+		staging.motion_vectors->flush();
 	}
 
-	// ── 4. Fill output params (camera / timing — from parsed JSON, no EXR I/O) ──
-	get_frame_params(frame, out);
-
-	return true;
+	return get_frame_params(frame_index, frame_params);
 }
 
-VkBuffer DatasetLoader::get_color_staging(uint32_t swapchain_index) const { return color_staging_[swapchain_index].buffer; }
-VkBuffer DatasetLoader::get_depth_staging(uint32_t swapchain_index) const { return depth_staging_[swapchain_index].buffer; }
-VkBuffer DatasetLoader::get_mv_staging(uint32_t swapchain_index) const    { return mv_staging_[swapchain_index].buffer; }
+VkBuffer NFRUDatasetLoader::get_color_staging_buffer(uint32_t swapchain_index) const
+{
+	return staging_buffers_[swapchain_index].color->get_handle();
+}
+VkBuffer NFRUDatasetLoader::get_depth_staging_buffer(uint32_t swapchain_index) const
+{
+	return staging_buffers_[swapchain_index].depth->get_handle();
+}
+VkBuffer NFRUDatasetLoader::get_motion_vector_staging_buffer(uint32_t swapchain_index) const
+{
+	return staging_buffers_[swapchain_index].motion_vectors->get_handle();
+}
 
-VkExtent2D DatasetLoader::get_display_size() const
+VkExtent2D NFRUDatasetLoader::get_display_size() const
 {
 	return display_size_;
 }
 
-VkExtent2D DatasetLoader::get_render_size() const
+VkExtent2D NFRUDatasetLoader::get_render_size() const
 {
 	return render_size_;
+}
+
+bool NFRUDatasetLoader::uses_inverted_depth() const
+{
+	return depth_inverted_;
+}
+
+bool NFRUDatasetLoader::uses_infinite_far() const
+{
+	return depth_infinite_;
 }

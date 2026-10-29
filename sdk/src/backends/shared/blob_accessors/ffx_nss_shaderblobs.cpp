@@ -18,8 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "ffx_nss_shaderblobs.h"
 #include "nss/ffx_nss_private.h"
@@ -62,13 +64,16 @@
 #if defined(POPULATE_PERMUTATION_KEY)
 #undef POPULATE_PERMUTATION_KEY
 #endif  // #if defined(POPULATE_PERMUTATION_KEY)
-#define POPULATE_PERMUTATION_KEY(options, key)                                                                             \
-    key.index                   = 0;                                                                                       \
-    key.REVERSE_Z               = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_REVERSE_Z);                            \
-    key.RESAMPLE_BICUBIC        = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC);                     \
-    key.MANAGE_HISTORY          = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_MANAGE_HISTORY);                       \
-    key.NSS_SHADER_QUALITY_MODE = ((options) >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK; \
-    key.NSS_SUPPORT_TENSOR      = 0;
+#define POPULATE_PERMUTATION_KEY(options, key)                                                                               \
+    key.index                     = 0;                                                                                       \
+    key.REVERSE_Z                 = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_REVERSE_Z);                            \
+    key.RESAMPLE_BICUBIC          = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC);                     \
+    key.MANAGE_HISTORY            = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_MANAGE_HISTORY);                       \
+    key.USE_EXPOSURE_TEXTURE      = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_EXPOSURE_TEXTURE);                     \
+    key.NSS_JITTER_MOTION_VECTORS = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_JITTER_MOTION_VECTORS);                \
+    key.NSS_SHADER_QUALITY_MODE   = ((options) >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK; \
+    key.NSS_LDR_MODE              = FFX_CONTAINS_FLAG(options, NSS_SHADER_PERMUTATION_LDR_MODE);                             \
+    key.NSS_SUPPORT_TENSOR        = 0;
 
 static FfxShaderBlob nssGetDepthScatterPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
@@ -92,14 +97,14 @@ static FfxShaderBlob nssGetDepthScatterPassPermutationBlobByIndex(uint32_t permu
 
 static FfxShaderBlob nssGetPreprocessPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
-    const bool useFragmentJob   = (permutationOptions & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) == NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT;
-    const auto supportTensorBit = useFragmentJob ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+    const bool useComputeJob    = (permutationOptions & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) != 0;
+    const auto supportTensorBit = useComputeJob ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
     ffx_nss_pre_process_PermutationKey key;
 
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
     key.NSS_SUPPORT_TENSOR = FFX_CONTAINS_FLAG(permutationOptions, supportTensorBit);
 
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -127,14 +132,14 @@ static FfxShaderBlob nssGetPreprocessPassPermutationBlobByIndex(uint32_t permuta
 
 static FfxShaderBlob nssGetDisocclusionMaskLqPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
-    const bool useFragmentJob   = (permutationOptions & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) == NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT;
-    const auto supportTensorBit = useFragmentJob ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+    const bool useComputeJob    = (permutationOptions & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) != 0;
+    const auto supportTensorBit = useComputeJob ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
     ffx_nss_disocclusion_mask_lq_PermutationKey key;
 
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
     key.NSS_SUPPORT_TENSOR = FFX_CONTAINS_FLAG(permutationOptions, supportTensorBit);
 
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -158,8 +163,8 @@ static FfxShaderBlob nssGetDisocclusionMaskLqPassPermutationBlobByIndex(uint32_t
 
 static FfxShaderBlob nssGetPostprocessPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
-    const bool useFragmentJob   = (permutationOptions & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) == NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT;
-    const auto supportTensorBit = useFragmentJob ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+    const bool useComputeJob    = (permutationOptions & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) != 0;
+    const auto supportTensorBit = useComputeJob ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
     ffx_nss_post_process_PermutationKey key;
 
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
@@ -168,7 +173,7 @@ static FfxShaderBlob nssGetPostprocessPassPermutationBlobByIndex(uint32_t permut
     key.SCALE_PRESET_MODE = FFX_CONTAINS_FLAG(permutationOptions, NSS_SHADER_PERMUTATION_SCALE_PRESET_X2) ? NSS_SCALE_PRESET_X2 : NSS_SCALE_PRESET_NONE;
     FFX_ASSERT(key.SCALE_PRESET_MODE < NSS_SCALE_PRESET_COUNT);
 
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -214,14 +219,14 @@ static FfxShaderBlob nssGetGenerateOffsetLutPassPermutationBlobByIndex(uint32_t 
 
 static FfxShaderBlob nssGetDebugViewPassPermutationBlobByIndex(uint32_t permutationOptions, bool is16bit)
 {
-    const bool useFragmentJob   = (permutationOptions & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) == NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT;
-    const auto supportTensorBit = useFragmentJob ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR;
+    const bool useComputeJob    = (permutationOptions & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) != 0;
+    const auto supportTensorBit = useComputeJob ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR;
 
     ffx_nss_debug_view_PermutationKey key;
     POPULATE_PERMUTATION_KEY(permutationOptions, key);
     key.NSS_SUPPORT_TENSOR = FFX_CONTAINS_FLAG(permutationOptions, supportTensorBit);
 
-    if (useFragmentJob)
+    if (!useComputeJob)
     {
         if (is16bit)
         {
@@ -266,7 +271,7 @@ static FfxShaderBlob nssGetGeneralVertexPermutationBlobByIndex(uint32_t permutat
 FfxErrorCode nssGetPermutationBlobByIndex(
     FfxNssPass passId, uint32_t permutationOptions, FfxShaderBlob* outShaderBlob, FfxShaderBlob* outVertBlob, FfxDataGraphBlob* outDataGraphBlob)
 {
-    const bool is16bit = FFX_CONTAINS_FLAG(permutationOptions, NSS_SHADER_PERMUTATION_ALLOW_16BIT);
+    const bool is16bit = !FFX_CONTAINS_FLAG(permutationOptions, NSS_SHADER_PERMUTATION_DISABLE_16BIT);
     const auto shaderQuality =
         static_cast<FfxNssShaderQualityMode>(((permutationOptions) >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK);
 

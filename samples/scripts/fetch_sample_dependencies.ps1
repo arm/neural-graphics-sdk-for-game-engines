@@ -71,7 +71,9 @@ foreach ($entry in Import-Csv -LiteralPath $manifestPath -Delimiter "`t") {
 
     $patterns = Get-SparsePatterns -RelativePath $entry.path -SparsePaths $sparsePaths[$entry.path]
     Invoke-Git -C $target sparse-checkout set --no-cone @patterns
-    Invoke-Git -C $target fetch --tags origin
+    # Existing dependency clones may contain stale or locally-created tags.
+    # These clones mirror the manifest remotes, so remote tags should win.
+    Invoke-Git -C $target fetch --tags --force origin
     Invoke-Git -C $target checkout --force --detach $entry.commit
 }
 

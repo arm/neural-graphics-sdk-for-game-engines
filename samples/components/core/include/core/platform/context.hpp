@@ -15,6 +15,11 @@
  * limitations under the License.
  */
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #pragma once
 
 #include <filesystem>
@@ -30,7 +35,7 @@ inline std::string find_samples_root()
 {
 	namespace fs = std::filesystem;
 	std::error_code ec;
-	auto cwd = fs::current_path(ec);
+	auto            cwd = fs::current_path(ec);
 	if (ec)
 		return {};
 

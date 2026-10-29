@@ -1,95 +1,96 @@
 # Neural Graphics SDK for Game Engines
 
-The Neural Graphics Software Development Kit (SDK) is Arm's unified graphics SDK for multiple rendering use cases across diverse game engines and platforms. Derived from [AMD FidelityFX SDK 1.1.3](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), it provides a modular, engine-agnostic framework that makes high-quality Neural Super Sampling (NSS) and Neural Frame Rate Upscaling (NFRU) straightforward to integrate. For complete build, integration, API, and sample instructions, see the [User Guide](docs/user_guide.md).
+The Arm Neural Graphics SDK is a unified neural-rendering software development kit for mobile GPU game engines.
+
+With the Arm Neural Graphics SDK, you can combine neural network inference with Vulkan ML extensions to deliver high image quality and high frame rates. The SDK is derived from [AMD FidelityFX SDK 1.1.3](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) and can be integrated through a Vulkan-only, engine-agnostic API.
+
+## Table of contents
+
+1. [Component overview](#component-overview)
+2. [Documentation](#documentation)
+3. [Neural Graphics Development Kit](#neural-graphics-development-kit)
+4. [Limitations](#limitations)
+5. [License](#license)
+6. [Trademarks and copyrights](#trademarks-and-copyrights)
 
 ---
 
-## Features
+## Component overview
 
-| Component | Description | Platforms |
-|-----------|-------------|-----------|
-| **NSS** — Neural Super Sampling | Temporal upscaling from render resolution to display resolution using a neural network. Supports Quality / Balanced / Performance presets and flexible upscale ratios. | Windows 11 x64, Linux x64, Android AArch64 |
-| **NFRU** — Neural Frame Rate Upscaling | Frame interpolation that generates one extra frame between every two rendered frames, increasing perceived frame rate with predictable latency. | Windows 11 x64, Linux x64, Android AArch64 |
+Currently, the SDK includes the following components:
 
----
+| Component | Description | Platforms | Detailed documentation |
+|-----------|-------------|-----------|------------------------|
+| **NSS** - Neural Super Sampling | Temporal upscaling from render resolution to display resolution using a neural network. | Windows x64, Linux x64/AArch64, Android AArch64 | [NSS guide](docs/NSS/NSS.md) |
+| **NFRU** - Neural Frame Rate Upscaling | Frame interpolation that generates one extra frame between rendered frames. | Windows x64, Linux x64/AArch64, Android AArch64 | [NFRU guide](docs/NFRU/NFRU.md) |
 
-## Requirements
-
-**Supported platforms:** Windows 11 x64, Linux x64, Android AArch64.
-
-| Tool category | Notes |
-|---------------|-------|
-| Git | Required to clone the repository and initialize its submodules |
-| CMake | Build system (see [user guide — setup](docs/user_guide.md#set-up-your-environment) for exact version range) |
-| Python 3 | Used by `build.py` |
-| Vulkan SDK | Vulkan-only backend; see [user guide — setup](docs/user_guide.md#set-up-your-environment) for recommended version |
-| Android NDK | Required for Android AArch64 target; see [user guide — platform requirements](docs/user_guide.md#platform-support) for details |
-
-### Vulkan Emulation Layer
-
-The SDK targets the Vulkan backend exclusively. For devices without native Vulkan ML extension support (`VK_ARM_tensors`, `VK_ARM_data_graph`), use the [Arm Vulkan ML Emulation Layer](https://github.com/arm/ai-ml-emulation-layer-for-vulkan/releases).
-
----
-
-## Quick Start
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/arm/neural-graphics-sdk-for-game-engines.git
-cd neural-graphics-sdk-for-game-engines
-git submodule update --init --recursive
-```
-
-### 2. Build
-
-```bash
-# Show all available options and targets
-python build.py -h
-
-# Example: Release build for Linux x64
-python build.py -t Release -b vk_linux_x64
-```
-
-Additional build targets (Windows x64, Android AArch64) and Docker-based builds are described in the [user guide](docs/user_guide.md#build-the-sdk).
-
-### 3. Integrate
-
-Add the SDK to your project as a CMake subproject (`add_subdirectory`) or link the prebuilt library from the `bin/` folder. Then create and dispatch an NSS or NFRU context using the SDK API. See the [user guide](docs/user_guide.md#integration-guidelines) for the complete integration walkthrough.
-
-### 4. Run a Sample
-
-```bash
-# Build with samples included
-python build.py -t Release -b vk_linux_x64 --build-samples
-```
-
-For NSS and NFRU sample configuration, dataset setup, and run instructions, see the [user guide — NSS sample](docs/user_guide.md#neural-super-sampling-sample) and [user guide — NFRU sample](docs/user_guide.md#neural-frame-rate-upscaling-sample) sections.
-
----
-
-## Known Issues
-
-- In very rare cases, certain upscale ratios can trigger float32 precision issues in the dynamic offset LUT generation path in NSS, which may manifest as visible black line artifacts in the upscaled output. As a workaround, users are advised to adjust the upscale ratio to avoid affected configurations until a permanent fix is available.
+> **API layer:** The SDK is derived from AMD FidelityFX SDK 1.1.3 and adds Arm-specific NSS and NFRU descriptors. This is not a drop-in implementation of every upstream FidelityFX effect or backend. Components share one Vulkan backend and can be integrated independently.
 
 ---
 
 ## Documentation
 
-- [User Guide](docs/user_guide.md) — build, integration, API reference, and samples
-- [Release Notes](RELEASE-NOTES.md)
+The following documentation is available:
+
+- [User Guide](docs/user_guide.md) - build and integration instructions, project layout, shared API, resource states, synchronization, lifecycle, diagnostics, and memory queries.
+- [Migration Note](docs/migration_note.md) - check this note when upgrading the SDK for source, ABI, and behavior changes.
+- [Compatibility matrix](docs/compatibility_matrix.md) - supported public dependency and tooling versions.
+- [NSS technical documentation](docs/NSS/NSS.md) - NSS context flags, resource contracts, jitter, motion vectors, dispatch, and debug views.
+- [NFRU technical documentation](docs/NFRU/NFRU.md) - NFRU context flags, prepare/dispatch flow, resource coordinate systems, and presentation pacing.
+- [Dataset capture guide](docs/Capture/Capture.md) - capture runtime NSS and NFRU data for offline replay and validation.
+- [NSS and NFRU integration troubleshooting](docs/integration_troubleshooting.md) - symptom-based input validation, debug-view interpretation, and visual examples.
+- [Sample documentation](samples/README.md) - sample dependency setup, build, run, and configuration instructions.
+- [Unit test guide](unit_test/README.md) - build and run unit tests for backend + component validation on linux/windows.
+- [Agent workflows](.agents/README.md) **(Experimental)** - SDK build, sample execution, focused tests, and dataset validation.
+
+---
+
+## Neural Graphics Development Kit
+
+The Neural Graphics SDK is part of the broader Neural Graphics Development Kit. The stack below links to each product or its documentation.
+
+| Neural Graphics Development Kit |
+|:------------------------------:|
+| [Game Engine Plugins](https://github.com/arm/neural-graphics-for-unreal) |
+| **[Neural Graphics SDK for Game Engines](https://github.com/arm/neural-graphics-sdk-for-game-engines) — (this repository)** |
+| [Vulkan Emulation Layer on PC](https://github.com/arm/ai-ml-emulation-layer-for-vulkan) |
+| Neural Graphics Models — [NSS](https://huggingface.co/Arm/neural-super-sampling) / [NFRU](https://huggingface.co/Arm/neural-frame-rate-upscaling) on Hugging Face |
+| [Neural Graphics Model Gym](https://github.com/arm/neural-graphics-model-gym) |
+| [Dataset capture](https://github.com/arm/neural-graphics-data-capture-for-unreal) / [Debug and Optimization tools](https://developer.arm.com/tools-and-software/arm-performance-studio) |
+| [Documentation and Resources](#additional-documentation-and-resources) |
+
+
+---
+
+### Additional Documentation and Resources
+
+- [Arm Neural technology](https://www.arm.com/technologies/neural-technology) - overview of Arm Neural technology.
+- [Arm Neural technology developer resources](https://developer.arm.com/mobile-graphics-and-gaming/neural-technology) - Neural technology information and resources on the Arm Developer website.
+
+---
+
+## Limitations
+
+The SDK currently has the following limitations:
+
+- **Vulkan only.** DirectX and Metal backends are not provided.
+- **Quantized data graphs only.** Both NSS and NFRU require quantized models.
+- **Application-owned synchronization.** The SDK does not synchronize work outside its recorded commands.
 
 ---
 
 ## License
 
-The Arm Neural Graphics SDK software in this repository is licensed under the [MIT License](LICENSES/MIT.txt)
+The Arm Neural Graphics SDK software in this repository is licensed under the [MIT License](LICENSES/MIT.txt).
 
 The [Arm Neural Graphics SDK Developer Guide](docs/user_guide.md) is not licensed under the MIT License.
 
-The [Arm Neural Graphics SDK Developer Guide](docs/user_guide.md) is licensed separately under the Creative Commons Attribution-NoDerivatives 4.0 International License (CC BY-ND 4.0): https://creativecommons.org/licenses/by-nd/4.0/  – see [CC-BY-4.0](LICENSES/CC-BY-4.0.txt)
+The [Arm Neural Graphics SDK Developer Guide](docs/user_guide.md) is licensed separately under the Creative Commons Attribution-NoDerivatives 4.0 International License (CC BY-ND 4.0): https://creativecommons.org/licenses/by-nd/4.0/. You can refer to [CC-BY-ND 4.0](LICENSES/CC-BY-ND-4.0.txt).
 
-Copyright © 2025–2026 Arm Limited.
+The VGF model files under `sdk/src/backends/vk/data_graphs/` are licensed under the
+[Arm AI Model Community License v1.0 (PRE-1154)](https://huggingface.co/Arm/neural-frame-rate-upscaling/blob/main/Arm_AI_Model_Community_License_v1_0_PRE-1154.pdf).
+
+Copyright © 2025-2026 Arm Limited.
 
 Except for the rights expressly granted under that license, Arm reserves all rights in the Developer Guide.
 
@@ -99,7 +100,7 @@ The MIT License applying to the Arm Neural Graphics SDK software does not apply 
 
 ---
 
-## Trademarks and Copyrights
+## Trademarks and copyrights
 
 AMD is a trademark of Advanced Micro Devices, Inc.
 
@@ -109,4 +110,4 @@ Arm® is a registered trademark of Arm Limited (or its subsidiaries) in the US a
 
 Vulkan is a registered trademark and the Vulkan SC logo is a trademark of the Khronos Group Inc.
 
-Visual Studio, Windows are registered trademarks or trademarks of Microsoft Corporation in the US and other jurisdictions.
+Visual Studio and Windows are registered trademarks or trademarks of Microsoft Corporation in the US and/or elsewhere.

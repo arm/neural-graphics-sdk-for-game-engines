@@ -20,11 +20,21 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #include "backends.h"
 #include "ffx_provider.h"
 #include <FidelityFX/host/ffx_error.h>
 #include <FidelityFX/host/ffx_types.h>
 #include <ffx_api/ffx_api.h>
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "API";
+}
 
 static uint64_t GetVersionOverride(const ffxApiHeader* header)
 {
@@ -35,6 +45,7 @@ static uint64_t GetVersionOverride(const ffxApiHeader* header)
             return versionDesc->versionId;
         }
     }
+    ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_INFO, "No version override was provided; the default provider will be selected.");
     return 0;
 }
 
@@ -55,6 +66,7 @@ FFX_API_ENTRY ffxReturnCode_t ffxCreateContext(ffxContext* context, ffxCreateCon
 FFX_API_ENTRY ffxReturnCode_t ffxDestroyContext(ffxContext* context, const ffxAllocationCallbacks* memCb)
 {
     VERIFY(context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
+    VERIFY(*context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
 
     Allocator alloc{memCb};
     return GetAssociatedProvider(context)->DestroyContext(context, alloc);
@@ -64,6 +76,7 @@ FFX_API_ENTRY ffxReturnCode_t ffxConfigure(ffxContext* context, const ffxConfigu
 {
     VERIFY(desc != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
     VERIFY(context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
+    VERIFY(*context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
 
     return GetAssociatedProvider(context)->Configure(context, desc);
 }
@@ -74,6 +87,9 @@ FFX_API_ENTRY ffxReturnCode_t ffxQuery(ffxContext* context, ffxQueryDescHeader* 
 
     if (context == nullptr)
     {
+        if (header->type == FFX_API_QUERY_DESC_TYPE_CAPTURESTATUS)
+            return FFX_API_RETURN_ERROR_PARAMETER;
+
         if (auto desc = ffx::DynamicCast<ffxQueryDescGetVersions>(header))
         {
             // if output count is zero or no other pointer passed, count providers only
@@ -94,10 +110,12 @@ FFX_API_ENTRY ffxReturnCode_t ffxQuery(ffxContext* context, ffxQueryDescHeader* 
         }
         else
         {
+            ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, "provider lookup failed: no provider supports the requested structure type");
             return FFX_API_RETURN_NO_PROVIDER;
         }
     }
 
+    VERIFY(*context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
     return GetAssociatedProvider(context)->Query(context, header);
 }
 
@@ -105,6 +123,7 @@ FFX_API_ENTRY ffxReturnCode_t ffxDispatch(ffxContext* context, const ffxDispatch
 {
     VERIFY(desc != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
     VERIFY(context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
+    VERIFY(*context != nullptr, FFX_API_RETURN_ERROR_PARAMETER);
 
     return GetAssociatedProvider(context)->Dispatch(context, desc);
 }

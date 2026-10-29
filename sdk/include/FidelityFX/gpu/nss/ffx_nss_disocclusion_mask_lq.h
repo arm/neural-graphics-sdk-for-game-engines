@@ -100,6 +100,7 @@ void DisocclusionFindDepthMotion4x4(int32_t2 dst_pos, out float closest_depth, o
         }
     }
 
+    closest_motion         = CancelMotionVectorJitter(closest_motion);
     local_view_depth_range = max_view_depth - min_view_depth;
 }
 

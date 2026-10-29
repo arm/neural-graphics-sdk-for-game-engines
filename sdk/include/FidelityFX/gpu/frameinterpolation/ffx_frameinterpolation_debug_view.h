@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef FFX_ARM_FRAMEINTERPOLATION_DEBUG_VIEW_H
 #define FFX_ARM_FRAMEINTERPOLATION_DEBUG_VIEW_H
@@ -47,7 +49,7 @@ FFX_MIN16_F3 DynamicMaskOverlayColor()
 // Load a single dynamic mask TP1 texel (clamped to the mask bounds).
 FFX_MIN16_F LoadDynamicMaskTp1(FfxFloat32x2 uv)
 {
-    FfxInt32x2 iMaskSize = MvDepthLaneSize();
+    FfxInt32x2 iMaskSize = DynamicMaskTp1Size();
     FfxInt32x2 maskCoord = clamp(FfxInt32x2(uv * FfxFloat32x2(iMaskSize)), FfxInt32x2(0, 0), iMaskSize - FfxInt32x2(1, 1));
     return FFX_MIN16_F(LoadDynamicMaskTp1(maskCoord));
 }
@@ -57,7 +59,12 @@ void computeDebugView(FfxInt32x2 outputPos)
 #define VIEWPORT_GRID_SIZE_X 3
 #define VIEWPORT_GRID_SIZE_Y 3
 
-    FfxInt32x2 iDisplaySize  = FfxInt32x2(DisplaySize());
+    FfxInt32x2 iDisplaySize = FfxInt32x2(DisplaySize());
+    if (any(greaterThanEqual(outputPos, iDisplaySize)))
+    {
+        return;
+    }
+
     FfxInt32x2 iViewportSize = iDisplaySize / FfxInt32x2(VIEWPORT_GRID_SIZE_X, VIEWPORT_GRID_SIZE_Y);
 
     // Determine which grid cell this output pixel belongs to

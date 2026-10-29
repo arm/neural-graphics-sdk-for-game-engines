@@ -20,16 +20,25 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "FrameInterpolationSwapchainVK_DebugPacing.h"
 #include "FrameInterpolationSwapchainVK.h"
 #include "FrameInterpolationSwapchainVK_Helpers.h"
 #include <FidelityFX/host/backends/vk/vk_wrapper.h>
 
+#include "ffx_logging.h"
+
 #include "FrameInterpolationSwapchainDebugPacingPS.h"
 #include "FrameInterpolationSwapchainDebugPacingVS.h"
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "FISwapchainDebugPacing";
+}
 
 constexpr uint32_t c_debugPacingRingBufferSize = 4;
 
@@ -43,10 +52,6 @@ uint32_t         s_debugPacingFrameIndex       = 0;
 uint32_t         s_debugPacingRingIndex        = 0;
 VkImageView      s_debugPacingImageRTViews[c_debugPacingRingBufferSize];
 VkFramebuffer    s_debugPacingFramebuffers[c_debugPacingRingBufferSize];
-
-#define FFX_BACKEND_API_ERROR_ON_VK_ERROR(res) \
-    if (res != VK_SUCCESS)                     \
-        return FFX_ERROR_BACKEND_API_ERROR;
 
 void releaseDebugPacingGpuResources(const VkAllocationCallbacks* pAllocator)
 {
@@ -413,7 +418,7 @@ FfxErrorCodes verifyDebugPacingGpuResources(VkPhysicalDevice physicalDevice, VkD
     if (res == VK_SUCCESS)
         return FFX_OK;
     else
-        return FFX_ERROR_BACKEND_API_ERROR;
+        return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "Vulkan debug pacing resources could not be created");
 }
 
 FFX_API FfxErrorCode ffxFrameInterpolationDebugPacing(const FfxPresentCallbackDescription* params, void* userContext)
@@ -477,7 +482,10 @@ FFX_API FfxErrorCode ffxFrameInterpolationDebugPacing(const FfxPresentCallbackDe
     viewCreateInfo.subresourceRange.layerCount     = 1;
 
     res = VulkanWrapper().vkCreateImageView(device, &viewCreateInfo, pAllocator, &s_debugPacingImageRTViews[s_debugPacingRingIndex]);
-    FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+    if (res != VK_SUCCESS)
+    {
+        return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in debug pacing setup failed");
+    }
 
     // create framebuffer
     if (s_debugPacingFramebuffers[s_debugPacingRingIndex] != VK_NULL_HANDLE)
@@ -497,7 +505,10 @@ FFX_API FfxErrorCode ffxFrameInterpolationDebugPacing(const FfxPresentCallbackDe
     framebufferCreateInfo.height                  = backBufferHeight;
     framebufferCreateInfo.layers                  = 1;
     res = VulkanWrapper().vkCreateFramebuffer(device, &framebufferCreateInfo, pAllocator, &s_debugPacingFramebuffers[s_debugPacingRingIndex]);
-    FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+    if (res != VK_SUCCESS)
+    {
+        return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in debug pacing setup failed");
+    }
 
     VkImageMemoryBarrier barrier;
     VkPipelineStageFlags srcStageMask = 0;

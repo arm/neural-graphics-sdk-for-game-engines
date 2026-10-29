@@ -29,10 +29,10 @@
 namespace vkb
 {
 TemporalForwardSubpass::TemporalForwardSubpass(RenderContext &render_context,
-                                              ShaderSource &&vertex_shader,
-                                              ShaderSource &&fragment_shader,
-                                              sg::Scene &scene,
-                                              sg::Camera &camera) :
+                                               ShaderSource &&vertex_shader,
+                                               ShaderSource &&fragment_shader,
+                                               sg::Scene     &scene,
+                                               sg::Camera    &camera) :
     ForwardSubpass(render_context, std::move(vertex_shader), std::move(fragment_shader), scene, camera)
 {
 }
@@ -98,8 +98,8 @@ void TemporalForwardSubpass::set_mipmap_lod_bias(float bias)
 // Halton sequence generation
 float TemporalForwardSubpass::create_halton_sequence(int32_t Index, int32_t Base)
 {
-	float Result = 0.0f;
-	float InvBase = 1.0f / float(Base);
+	float Result   = 0.0f;
+	float InvBase  = 1.0f / float(Base);
 	float Fraction = InvBase;
 	while (Index > 0)
 	{
@@ -132,7 +132,6 @@ void TemporalForwardSubpass::prepare_halton_sequence()
 	}
 }
 
-
 void TemporalForwardSubpass::update_jitter_settings_buffer()
 {
 	auto &render_frame = get_render_context().get_active_frame();
@@ -146,10 +145,9 @@ void TemporalForwardSubpass::update_jitter_settings_buffer()
 	}
 	else
 	{
-		uint32_t jitter_index  = frame_index % MAX_TAA_SAMPLES;
+		uint32_t jitter_index = frame_index % MAX_TAA_SAMPLES;
 		current_jitter_pixels = halton_sequence[jitter_index];
 	}
-
 
 	// ----------------Convert pixel jitter to NDC jitter----------------
 	// NDC jitter: multiply by 2.0 because NDC range is [-1, 1] (width of 2)
@@ -172,12 +170,12 @@ void TemporalForwardSubpass::update_jitter_settings_buffer()
 	jittered_projection[2][1] += ndc_jitter_offset.y * jitter_scale;
 
 	auto jitter_view_proj = camera.get_pre_rotation() *
-	                     vkb::rendering::vulkan_style_projection(jittered_projection) *
-	                     camera.get_view();
+	                        vkb::rendering::vulkan_style_projection(jittered_projection) *
+	                        camera.get_view();
 
 	// -----------------Update uniform buffer----------------------
 	JitterSettings jitter_settings_data{};
-	jitter_settings_data.jitter_view_proj  = jitter_view_proj;
+	jitter_settings_data.jitter_view_proj = jitter_view_proj;
 	// When velocity_stride == 2, feed the 2-frames-ago VP as "prev" so the
 	// shader produces motion vectors spanning two rendered frames.
 	jitter_settings_data.prev_view_proj    = (velocity_stride >= 2) ? prev_prev_view_proj_matrix : prev_view_proj_matrix;
@@ -204,20 +202,20 @@ void TemporalForwardSubpass::update_uniform(vkb::core::CommandBufferC &command_b
 	}
 
 	// Update per-node motion tracking (previous and current transforms)
-	auto current_transform = node.get_transform().get_world_matrix();
-	auto &motion = node_motion_data[&node];
+	auto  current_transform = node.get_transform().get_world_matrix();
+	auto &motion            = node_motion_data[&node];
 	if (!motion.initialized)
 	{
-		motion.previous_transform = current_transform;
-		motion.current_transform  = current_transform;
+		motion.previous_transform  = current_transform;
+		motion.current_transform   = current_transform;
 		motion.prev_prev_transform = current_transform;
-		motion.initialized        = true;
+		motion.initialized         = true;
 	}
 	else if (motion.last_update_frame != frame_index)
 	{
 		motion.prev_prev_transform = motion.previous_transform;
-		motion.previous_transform = motion.current_transform;
-		motion.current_transform  = current_transform;
+		motion.previous_transform  = motion.current_transform;
+		motion.current_transform   = current_transform;
 	}
 	else
 	{

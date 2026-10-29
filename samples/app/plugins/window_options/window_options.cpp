@@ -1,4 +1,4 @@
-/* Copyright (c) 2020-2025, Arm Limited and Contributors
+/* Copyright (c) 2020-2026, Arm Limited and Contributors
  * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -30,7 +30,8 @@ WindowOptions::WindowOptions() :
                       "A collection of flags to configure window used when running the application. Implementation may differ between platforms",
                       {},
                       {},
-                      {{"borderless", "Run in borderless mode"},
+                      {{"always-render", "Continue rendering when the window is not focused"},
+                       {"borderless", "Run in borderless mode"},
                        {"fullscreen", "Run in fullscreen mode"},
                        {"headless-surface", "Run in headless surface mode. A Surface and swap-chain is still created using VK_EXT_headless_surface."},
                        {"height", "Initial window height"},
@@ -46,7 +47,14 @@ bool WindowOptions::handle_option(std::deque<std::string> &arguments)
 	std::string option = arguments[0].substr(2);
 
 	vkb::Window::OptionalProperties properties;
-	if (option == "borderless")
+	if (option == "always-render")
+	{
+		platform->force_render(true);
+
+		arguments.pop_front();
+		return true;
+	}
+	else if (option == "borderless")
 	{
 		properties.mode = vkb::Window::Mode::FullscreenBorderless;
 		platform->set_window_properties(properties);

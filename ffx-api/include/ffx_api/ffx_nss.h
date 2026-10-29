@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 #include "ffx_api.h"
@@ -42,23 +44,32 @@ enum FfxApiNssShaderQualityMode
 /// @ingroup ffxNss
 enum FfxApiCreateContextNssFlags
 {
-    FFX_API_NSS_CONTEXT_FLAG_QUANTIZED          = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
-    FFX_API_NSS_CONTEXT_FLAG_HIGH_DYNAMIC_RANGE = (1 << 1),  ///< A bit indicating if the input color data provided is using a high-dynamic range.
-    FFX_API_NSS_CONTEXT_FLAG_DEPTH_INVERTED     = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
-    FFX_API_NSS_CONTEXT_FLAG_DEPTH_INFINITE     = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
-    FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC   = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
-    FFX_API_NSS_CONTEXT_FLAG_ALLOW_16BIT        = (1 << 5),  ///< A bit indicating that the runtime should allow 16bit resources to be used.
+    FFX_API_NSS_CONTEXT_FLAG_QUANTIZED = (1 << 0),  ///< Use a quantized data graph. Resources will be quantized to 8 bits.
+    FFX_API_NSS_CONTEXT_FLAG_LOW_DYNAMIC_RANGE =
+        (1 << 1),  ///< A bit indicating that input and output color use the experimental LDR [0, 1] path. When unset, the recommended HDR path is used.
+    FFX_API_NSS_CONTEXT_FLAG_DEPTH_INVERTED   = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
+    FFX_API_NSS_CONTEXT_FLAG_DEPTH_INFINITE   = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
+    FFX_API_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC = (1 << 4),  ///< A bit indicating sample using Bicubic filtering
+    /// Disable 16-bit resources and force FP32. When unset, FP16 is selected on hardware that supports it.
+    /// On Vulkan, the caller must enable the required device features before context creation.
+    FFX_API_NSS_CONTEXT_FLAG_DISABLE_16BIT = (1 << 5),
     FFX_API_NSS_CONTEXT_FLAG_MANAGE_HISTORY =
         (1 << 6),  ///< A bit indicating that the SDK manages the history textures internally. When not set the user must supply outputTm1 each dispatch.
-    FFX_API_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT  = (1 << 7),  ///< A bit indicating that the pre-process shader should run as a fragment job when supported.
-    FFX_API_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT = (1 << 8),  ///< A bit indicating that the post-process shader should run as a fragment job when supported.
+    FFX_API_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE =
+        (1 << 7),  ///< A bit indicating that the pre-process shader should run as a compute job. When unset, the fragment path is used.
+    FFX_API_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE =
+        (1 << 8),  ///< A bit indicating that the post-process shader should run as a compute job. When unset, the fragment path is used.
+    FFX_API_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE =
+        (1
+         << 9),  ///< A bit indicating that the exposure value should be read from the <c><i>exposureTexture</i></c> resource instead of the scalar <c><i>exposure</i></c>. The caller must supply <c><i>exposureTexture</i></c> each dispatch.
+    FFX_API_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION =
+        (1 << 10),  ///< Input motion vectors include camera jitter. Leave unset for de-jittered motion vectors.
 };
 
 /// @ingroup ffxNss
 enum FfxApiDispatchNssFlags
 {
-    FFX_API_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING =
-        (1 << 0),  ///< A bit indicating that dispatch parameters should be validated and errors reported via the message callback.
+    FFX_API_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING = (1 << 0),  ///< Enables verbose dispatch diagnostics; required validation remains active when unset.
     FFX_API_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW =
         (1 << 1),  ///< A bit indicating that the debug view pass should run, writing intermediate resources into the debugViews resource.
 };
@@ -67,6 +78,9 @@ enum FfxApiDispatchNssFlags
 #define FFX_API_EFFECT_ID_NSS 0x000F0000u  ///< 0x000F0000u - chosen to avoid conflicts with the Upscale api - which is 0x00010000u
 
 #define FFX_API_CREATE_CONTEXT_DESC_TYPE_NSS 0x000F0000u  ///< header type for <c><i>ffxApiCreateContextDescNss</i></c>.
+/// <c>fpMessage</c> is synchronous, unfiltered by <c>FFX_SDK_LOG_LEVEL</c>, and retained until context destruction.
+/// Its message is valid only during the call; callbacks must not throw or re-enter NSS.
+/// Calls using the same context must be externally serialized.
 /// @ingroup ffxNss
 struct ffxApiCreateContextDescNss
 {
@@ -95,14 +109,16 @@ struct ffxApiDispatchDescNss
     struct FfxApiResource
         outputTm1;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame (at presentation resolution). Ignored when FFX_API_NSS_CONTEXT_FLAG_MANAGE_HISTORY is set; required otherwise. The caller is responsible for ping-ponging: pass frame N's output as frame N+1's outputTm1.
 
-    struct FfxApiFloatCoords2D jitterOffset;            ///< The subpixel jitter offset applied to the camera.
+    struct FfxApiFloatCoords2D jitterOffset;            ///< Render-pixel sample-position offset, opposite to the rasterized image displacement.
     struct FfxApiDimensions2D  upscaleSize;             ///< The resolution that was used for rendering the output resources.
     struct FfxApiDimensions2D  renderSize;              ///< The resolution that was used for rendering the input resources.
     float                      cameraNear;              ///< The distance to the near plane of the camera.
     float                      cameraFar;               ///< The distance to the far plane of the camera.
     float                      cameraFovAngleVertical;  ///< The camera angle field of view in the vertical direction (expressed in radians).
 
-    float                      exposure;           ///< The exposure value
+    float exposure;  ///< The exposure value. Used when FFX_API_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is not set.
+    struct FfxApiResource
+                               exposureTexture;  ///< Optional <c><i>FfxResource</i></c> containing a 1x1 exposure value (read from texel 0,0 .x). Required when FFX_API_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is set; ignored otherwise.
     struct FfxApiFloatCoords2D motionVectorScale;  ///< The scale applied to the motion vectors.
 
     float                 frameTimeDelta;  ///< The time elapsed since the last frame (expressed in milliseconds).
@@ -137,13 +153,26 @@ struct ffxApiQueryDescNssGetJitterOffset
 };
 
 /// @ingroup ffxNss
-#define FFX_API_QUERY_DESC_TYPE_NSS_GETPIPELINESTAGEINFO 0x000F0006u  ///< header type for <c><i>ffxApiQueryDescNssGetPipelineStageInfo</i></c>.
+#define FFX_API_QUERY_DESC_TYPE_NSS_GPU_MEMORY_USAGE 0x000F0007u
+
 /// @ingroup ffxNss
-struct ffxApiQueryDescNssGetPipelineStageInfo
+struct ffxApiQueryDescNssGetGPUMemoryUsage
 {
-    ffxQueryDescHeader header;
-    bool* pOutPreProcessUsesFragment;   ///< A pointer to a <c>bool</c> which will be set to true if the pre-process stage runs as a fragment job. May be null.
-    bool* pOutPostProcessUsesFragment;  ///< A pointer to a <c>bool</c> which will be set to true if the post-process stage runs as a fragment job. May be null.
+    ffxQueryDescHeader              header;
+    struct FfxApiEffectMemoryUsage* gpuMemoryUsageNss;
+};
+
+/// @ingroup ffxNss
+#define FFX_API_QUERY_DESC_TYPE_NSS_CPU_MEMORY_USAGE 0x000F0008u
+
+/// Queries current and peak CPU heap memory owned by an NSS context.
+/// Returns <c>FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE</c> when the SDK is built
+/// with <c>FFX_ENABLE_CPU_HEAP_TRACKING=OFF</c>.
+/// @ingroup ffxNss
+struct ffxApiQueryDescNssGetCPUMemoryUsage
+{
+    ffxQueryDescHeader                 header;
+    struct FfxApiEffectCpuMemoryUsage* cpuMemoryUsageNss;
 };
 
 #ifdef __cplusplus

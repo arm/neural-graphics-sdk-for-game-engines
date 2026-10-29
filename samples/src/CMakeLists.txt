@@ -22,6 +22,9 @@ scan_dirs(
         DIR ${CMAKE_CURRENT_SOURCE_DIR}
         LIST SUB_DIRS)
 
+list(REMOVE_ITEM SUB_DIRS common)
+add_subdirectory(common)
+
 # List of all samples
 set(TOTAL_SAMPLE_ID_LIST)
 

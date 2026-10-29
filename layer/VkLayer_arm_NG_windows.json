@@ -3,7 +3,7 @@
   "layer": {
     "name": "VK_LAYER_ARM_NG",
     "type": "GLOBAL",
-    "library_path": ".\\VkLayer_arm_NG.dll",
+    "library_path": ".\\VkLayer_arm_NG_windows.dll",
     "api_version": "1.3.0",
     "implementation_version": "1",
     "description": "Arm Neural Graphics Vulkan layer",

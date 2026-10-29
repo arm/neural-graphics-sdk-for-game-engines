@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -77,6 +79,7 @@ static bool LoadVulkanFunctions(const VkDeviceContext& vkDeviceContext, VkFuncti
         success &= loader.getInstanceProc(tb.vkEnumerateDeviceExtensionProperties, "vkEnumerateDeviceExtensionProperties");
         success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties");
         success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties");
+        success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceFormatProperties, "vkGetPhysicalDeviceFormatProperties");
         success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceFeatures2, "vkGetPhysicalDeviceFeatures2");
         success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceProperties2, "vkGetPhysicalDeviceProperties2");
         success &= loader.getInstanceProc(tb.vkGetPhysicalDeviceQueueFamilyProperties, "vkGetPhysicalDeviceQueueFamilyProperties");
@@ -148,6 +151,7 @@ static bool LoadVulkanFunctions(const VkDeviceContext& vkDeviceContext, VkFuncti
         success &= loader.getDeviceProc(tb.vkCmdCopyImage, "vkCmdCopyImage");
         success &= loader.getDeviceProc(tb.vkCmdCopyBufferToImage, "vkCmdCopyBufferToImage");
         success &= loader.getDeviceProc(tb.vkCmdClearColorImage, "vkCmdClearColorImage");
+        success &= loader.getDeviceProc(tb.vkCmdClearDepthStencilImage, "vkCmdClearDepthStencilImage");
         success &= loader.getDeviceProc(tb.vkCmdFillBuffer, "vkCmdFillBuffer");
 
         success &= loader.getDeviceProc(tb.vkCmdBeginRenderPass, "vkCmdBeginRenderPass");

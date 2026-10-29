@@ -69,26 +69,26 @@ class TemporalForwardSubpass : public ForwardSubpass
 	 * @param camera Camera used to look at the scene
 	 */
 	TemporalForwardSubpass(RenderContext &render_context,
-	                 ShaderSource &&vertex_shader,
-	                 ShaderSource &&fragment_shader,
-	                 sg::Scene &scene,
-	                 sg::Camera &camera);
+	                       ShaderSource &&vertex_shader,
+	                       ShaderSource &&fragment_shader,
+	                       sg::Scene     &scene,
+	                       sg::Camera    &camera);
 
 	void prepare() override;
 	void draw(vkb::core::CommandBufferC &command_buffer) override;
 	void update_uniform(vkb::core::CommandBufferC &command_buffer, vkb::sg::Node &node, size_t thread_index) override;
 
 	// ---- Jitter configuration / accessors ----
-	void  set_jitter_scale(float scale);
-	float get_jitter_scale() const;
+	void      set_jitter_scale(float scale);
+	float     get_jitter_scale() const;
 	glm::vec2 get_current_jitter_pixels() const;
 	glm::vec2 get_current_jitter_pixels_scaled() const;
 
 	// Override the subpass jitter with a caller-supplied pixel offset.
 	// set_external_jitter() pins the jitter; clear_external_jitter() restores
 	// the built-in Halton sequence. They are a matched pair.
-	void set_external_jitter(const glm::vec2 &jitter_pixels);
-	void clear_external_jitter();
+	void     set_external_jitter(const glm::vec2 &jitter_pixels);
+	void     clear_external_jitter();
 	uint32_t peek_frame_index() const;
 
 	// ---- View-projection access ----
@@ -105,7 +105,6 @@ class TemporalForwardSubpass : public ForwardSubpass
 	// ---- Shader configuration ----
 	void set_mipmap_lod_bias(float bias);
 
-
   private:
 	struct NodeMotionData
 	{
@@ -113,7 +112,7 @@ class TemporalForwardSubpass : public ForwardSubpass
 		glm::mat4 previous_transform{1.0f};
 		glm::mat4 prev_prev_transform{1.0f};
 		uint32_t  last_update_frame{0};
-		bool initialized{false};
+		bool      initialized{false};
 	};
 
 	static float create_halton_sequence(int32_t index, int32_t base);
@@ -121,20 +120,20 @@ class TemporalForwardSubpass : public ForwardSubpass
 	void         update_jitter_settings_buffer();
 
 	std::optional<glm::vec2> external_jitter_pixels{};
-	glm::vec2               current_jitter_pixels{0.0f, 0.0f};
-	float                   jitter_scale{1.0f};
+	glm::vec2                current_jitter_pixels{0.0f, 0.0f};
+	float                    jitter_scale{1.0f};
 
 	static constexpr uint32_t MAX_TAA_SAMPLES = 16;
-	std::vector<glm::vec2>  halton_sequence{};
+	std::vector<glm::vec2>    halton_sequence{};
 
-	bool                    first_frame{true};
-	uint32_t                frame_index{0};
+	bool     first_frame{true};
+	uint32_t frame_index{0};
 
-	glm::mat4               prev_view_proj_matrix{1.0f};
-	glm::mat4               prev_prev_view_proj_matrix{1.0f};
-	uint32_t                velocity_stride{1};
+	glm::mat4 prev_view_proj_matrix{1.0f};
+	glm::mat4 prev_prev_view_proj_matrix{1.0f};
+	uint32_t  velocity_stride{1};
 
-	vkb::BufferAllocationC   jitter_settings_allocation{};
+	vkb::BufferAllocationC jitter_settings_allocation{};
 
 	std::unordered_map<vkb::sg::Node *, NodeMotionData> node_motion_data{};
 

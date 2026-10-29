@@ -98,13 +98,6 @@ namespace ffx
     }
 
     template <class... Desc>
-    inline ReturnCode Configure(Desc&... desc)
-    {
-        auto header = LinkHeaders(desc.header...);
-        return detail::ConvertReturnCode(ffxConfigure(nullptr, header));
-    }
-
-    template <class... Desc>
     inline ReturnCode Query(Context& context, Desc&... desc)
     {
         auto header = LinkHeaders(desc.header...);
@@ -155,6 +148,29 @@ namespace ffx
     };
 
     struct ConfigureDescGlobalDebug1 : public InitHelper<ffxConfigureDescGlobalDebug1>
+    {
+    };
+
+    template <>
+    struct struct_type<ffxApiConfigureDescCapture> : std::integral_constant<uint64_t, FFX_API_CONFIGURE_DESC_TYPE_CAPTURE>
+    {
+    };
+
+    struct ConfigureDescCapture : public InitHelper<ffxApiConfigureDescCapture>
+    {
+        ConfigureDescCapture()
+        {
+            this->motionVectorUnormBias  = 0.5f;
+            this->motionVectorUnormScale = 2.0f;
+        }
+    };
+
+    template <>
+    struct struct_type<ffxApiQueryDescCaptureStatus> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_CAPTURESTATUS>
+    {
+    };
+
+    struct QueryDescCaptureStatus : public InitHelper<ffxApiQueryDescCaptureStatus>
     {
     };
 

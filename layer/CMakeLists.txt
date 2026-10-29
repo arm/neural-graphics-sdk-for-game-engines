@@ -5,14 +5,25 @@ cmake_minimum_required(VERSION 3.21)
 
 project(NGLayer LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../sdk/cmake/release_build.cmake")
+
 # Canonical short name for the layer. The Vulkan layer name is derived from
-# this via "VK_LAYER_ARM_<name>"; the binary/manifest filenames are
-# "VkLayer_arm_<name>". Keep all literal occurrences in sync via this var.
+# this via "VK_LAYER_ARM_<name>"; platform-specific binary/manifest filenames
+# keep Linux and Android layer libraries from colliding in release packages.
 set(NGLAYER_SHORT_NAME      "NG")
 set(NGLAYER_NAME            "VK_LAYER_ARM_${NGLAYER_SHORT_NAME}")
 set(NGLAYER_OUTPUT_NAME     "VkLayer_arm_${NGLAYER_SHORT_NAME}")
-set(NGLAYER_MANIFEST_LINUX   "${NGLAYER_OUTPUT_NAME}.json")
-set(NGLAYER_MANIFEST_WINDOWS "${NGLAYER_OUTPUT_NAME}_windows.json")
+set(NGLAYER_MANIFEST_LINUX   "VkLayer_arm_${NGLAYER_SHORT_NAME}_linux.json")
+set(NGLAYER_MANIFEST_ANDROID "VkLayer_arm_${NGLAYER_SHORT_NAME}_android.json")
+set(NGLAYER_MANIFEST_WINDOWS "VkLayer_arm_${NGLAYER_SHORT_NAME}_windows.json")
+
+if(ANDROID)
+    set(NGLAYER_OUTPUT_NAME "VkLayer_arm_${NGLAYER_SHORT_NAME}_android")
+elseif(WIN32)
+    set(NGLAYER_OUTPUT_NAME "VkLayer_arm_${NGLAYER_SHORT_NAME}_windows")
+elseif(UNIX)
+    set(NGLAYER_OUTPUT_NAME "VkLayer_arm_${NGLAYER_SHORT_NAME}_linux")
+endif()
 
 add_library(NGLayer SHARED
     NGLayer.cpp
@@ -47,6 +58,10 @@ set_target_properties(NGLayer PROPERTIES
 )
 
 if(ANDROID)
+    target_link_options(NGLayer PRIVATE
+        LINKER:-z,max-page-size=16384
+        LINKER:-z,common-page-size=16384
+    )
     target_link_libraries(NGLayer PRIVATE log) # logcat support
 endif()
 
@@ -77,15 +92,20 @@ if(DEFINED FFX_BUILD_NGLAYER OR EXISTS "${CMAKE_HOME_DIRECTORY}/bin")
     # Copy the platform-appropriate manifest into ${CMAKE_HOME_DIRECTORY}/bin
     # alongside the freshly built layer so that consumers picking up the bin/
     # snapshot get a self-contained Vulkan layer drop.
-    if(WIN32)
+    if(ANDROID)
+        set(_nglayer_manifest "${CMAKE_CURRENT_SOURCE_DIR}/${NGLAYER_MANIFEST_ANDROID}")
+        set(_nglayer_manifest_output "${CMAKE_HOME_DIRECTORY}/bin/${NGLAYER_MANIFEST_ANDROID}")
+    elseif(WIN32)
         set(_nglayer_manifest "${CMAKE_CURRENT_SOURCE_DIR}/${NGLAYER_MANIFEST_WINDOWS}")
+        set(_nglayer_manifest_output "${CMAKE_HOME_DIRECTORY}/bin/${NGLAYER_MANIFEST_WINDOWS}")
     else()
         set(_nglayer_manifest "${CMAKE_CURRENT_SOURCE_DIR}/${NGLAYER_MANIFEST_LINUX}")
+        set(_nglayer_manifest_output "${CMAKE_HOME_DIRECTORY}/bin/${NGLAYER_MANIFEST_LINUX}")
     endif()
     add_custom_command(TARGET NGLayer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_nglayer_manifest}"
-                "${CMAKE_HOME_DIRECTORY}/bin/${NGLAYER_MANIFEST_LINUX}"
+                "${_nglayer_manifest_output}"
         COMMENT "NGLayer: staging Vulkan layer manifest into bin/"
         VERBATIM
     )

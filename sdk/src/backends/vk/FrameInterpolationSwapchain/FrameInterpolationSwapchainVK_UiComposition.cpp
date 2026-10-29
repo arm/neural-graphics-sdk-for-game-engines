@@ -20,10 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "FrameInterpolationSwapchainVK_UiComposition.h"
+
+#include "ffx_logging.h"
+
 #include "FrameInterpolationSwapchainVK_Helpers.h"
 #include <vulkan/vulkan.h>
 #include <FidelityFX/host/backends/vk/vk_wrapper.h>
@@ -33,6 +38,11 @@
 
 #include "FrameInterpolationSwapchainUiCompositionPremulPS.h"
 #include "FrameInterpolationSwapchainUiCompositionPremulVS.h"
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "FISwapchainUIComposition";
+}
 
 constexpr uint32_t c_uiCompositionRingBufferSize = 4;
 constexpr uint32_t c_uiCompositionViewCount      = 3;  // 2 uniforms + 1 render target
@@ -50,10 +60,6 @@ uint32_t              s_uiCompositionDescriptorSetIndex  = 0;
 VkDescriptorSet       s_uiCompositionDescriptorSets[c_uiCompositionRingBufferSize];
 VkImageView           s_uiCompositionImageViews[c_uiCompositionTotalViewCount];
 VkFramebuffer         s_uiCompositionFramebuffers[c_uiCompositionRingBufferSize];
-
-#define FFX_BACKEND_API_ERROR_ON_VK_ERROR(res) \
-    if (res != VK_SUCCESS)                     \
-        return FFX_ERROR_BACKEND_API_ERROR;
 
 void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator)
 {
@@ -484,7 +490,7 @@ FfxErrorCodes verifyUiBlitGpuResources(VkDevice device, VkFormat fmt, const VkAl
     if (res == VK_SUCCESS)
         return FFX_OK;
     else
-        return FFX_ERROR_BACKEND_API_ERROR;
+        return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "Vulkan UI composition resources could not be created");
 }
 
 FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallbackDescription* params, void* unusedUserCtx)
@@ -518,7 +524,7 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
 
     // TODO: should we keep that?
     if ((backBufferWidth != renderTargetWidth) || (backBufferHeight != renderTargetHeight))
-        return FFX_ERROR_INVALID_SIZE;
+        return ffxLogError(FFX_ERROR_INVALID_SIZE, "the backbuffer and output swapchain dimensions do not match");
 
     // some helper functions
     auto setBarrier = [](VkImageMemoryBarrier* barriers,
@@ -643,11 +649,20 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
         };
 
         res = createView(backbufferImage, params->currentBackBuffer.description.format, viewOffset);
-        FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+        if (res != VK_SUCCESS)
+        {
+            return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in UI composition setup failed");
+        }
         res = createView(uiImage, params->currentUI.description.format, viewOffset + 1);
-        FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+        if (res != VK_SUCCESS)
+        {
+            return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in UI composition setup failed");
+        }
         res = createView(renderTargetImage, params->outputSwapChainBuffer.description.format, viewOffset + 2);
-        FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+        if (res != VK_SUCCESS)
+        {
+            return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in UI composition setup failed");
+        }
 
         // update the descriptor set
         VkDescriptorImageInfo imageInfos[2];
@@ -689,7 +704,10 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
         framebufferCreateInfo.height                  = renderTargetHeight;
         framebufferCreateInfo.layers                  = 1;
         res = VulkanWrapper().vkCreateFramebuffer(device, &framebufferCreateInfo, pAllocator, &s_uiCompositionFramebuffers[s_uiCompositionDescriptorSetIndex]);
-        FFX_BACKEND_API_ERROR_ON_VK_ERROR(res);
+        if (res != VK_SUCCESS)
+        {
+            return ffxLogError(FFX_ERROR_BACKEND_API_ERROR, "a Vulkan operation in UI composition setup failed");
+        }
 
         VkImageMemoryBarrier barriers[3];
         uint32_t             barrierCount = 0;

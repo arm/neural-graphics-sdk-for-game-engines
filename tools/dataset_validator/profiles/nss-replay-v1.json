@@ -1,0 +1,154 @@
+{
+  "name": "nss-replay-v1",
+  "description": "NSS capture layout used by DatasetReplay-compatible inputs.",
+  "supported_use_cases": [
+    "debug",
+    "replay"
+  ],
+  "lane_defaults": {
+    "pixel_types": [
+      "HALF",
+      "FLOAT"
+    ]
+  },
+  "metadata": {
+    "camera_planes": "versioned_or_legacy",
+    "required_top_level": [
+      "TargetResolution",
+      "UpscalingRatiosIndices",
+      "Samples",
+      "Frames"
+    ],
+    "required_frame": [
+      "Frame",
+      "FovX",
+      "FovY",
+      "Exposure"
+    ]
+  },
+  "jitter": {
+    "required_use_cases": [
+      "debug",
+      "replay"
+    ],
+    "keys": [
+      "QuantisedPerRatioJitter",
+      "NormalizedPerRatioJitter"
+    ],
+    "dimension_lane": "color",
+    "cadence": "all",
+    "range_pixels": [
+      -0.5,
+      0.5
+    ],
+    "max_abs_mean_pixels": 0.15,
+    "min_span_pixels": 0.4,
+    "min_quadrants": 4,
+    "min_phase_length": 4,
+    "max_duplicate_fraction": 0.25,
+    "min_nearest_spacing_pixels": 0.05,
+    "max_abs_correlation": 0.95
+  },
+  "exposure": {
+    "required_use_cases": [
+      "debug",
+      "replay"
+    ],
+    "field": "Exposure",
+    "cadence": "all",
+    "minimum_exclusive": 0.0,
+    "warning_maximum": 1024.0
+  },
+  "lanes": {
+    "color": {
+      "paths": [
+        "{scale}/colour/{sequence}",
+        "{scale}/color/{sequence}"
+      ],
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "cadence": "all",
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "dimension_group": "render"
+    },
+    "depth": {
+      "paths": [
+        "{scale}/depth/{sequence}"
+      ],
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "cadence": "all",
+      "channels": [
+        "R"
+      ],
+      "channel_aliases": [
+        "Y"
+      ],
+      "dimension_group": "render",
+      "value_range": [
+        0.0,
+        1.0
+      ]
+    },
+    "motion": {
+      "paths": [
+        "{scale}/motion/{sequence}"
+      ],
+      "content": "motion",
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "cadence": "all",
+      "channels": [
+        "R",
+        "G"
+      ],
+      "dimension_group": "render",
+      "value_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    "ground_truth": {
+      "paths": [
+        "ground_truth/{sequence}"
+      ],
+      "required_use_cases": [],
+      "recommended_use_cases": [
+        "debug"
+      ],
+      "cadence": "all",
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "dimension_group": "target"
+    },
+    "prediction": {
+      "paths": [
+        "result/nss_{scale}/{sequence}"
+      ],
+      "required_use_cases": [],
+      "recommended_use_cases": [
+        "debug"
+      ],
+      "cadence": "all",
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "dimension_group": "target"
+    }
+  }
+}

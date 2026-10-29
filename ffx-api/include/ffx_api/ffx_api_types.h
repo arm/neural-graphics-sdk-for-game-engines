@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -204,10 +206,6 @@ struct FfxApiResourceDescription
     uint32_t mipCount;  ///< Number of mips (or 0 for full mipchain).
     uint32_t flags;     ///< A set of resource flags.
     uint32_t usage;     ///< Resource usage flags.
-
-    // // Only host-side fields, for now
-    uint32_t batchSize = 0;  ///< Only used by tensor resource.
-    uint32_t shapeSize = 0;  ///< Only used by tensor resource.
 };
 
 struct FfxApiResource
@@ -221,8 +219,26 @@ struct FfxApiResource
 typedef struct FfxApiEffectMemoryUsage
 {
     uint64_t totalUsageInBytes;
+    uint64_t textureUsageInBytes;
+    uint64_t bufferUsageInBytes;
+    uint64_t tensorUsageInBytes;
+    uint64_t dataGraphUsageInBytes;
     uint64_t aliasableUsageInBytes;
 } FfxApiEffectMemoryUsage;
+
+/// Requested CPU heap memory owned by an effect context.
+///
+/// This includes the provider context and allocations made through its tracked
+/// allocator (currently backend scratch buffers). It excludes stack memory,
+/// STL container allocations, allocator bookkeeping, GPU driver allocations,
+/// and dynamic allocations internal to third-party libraries. The query is
+/// available when the SDK is built with
+/// <c>FFX_ENABLE_CPU_HEAP_TRACKING=ON</c>.
+typedef struct FfxApiEffectCpuMemoryUsage
+{
+    uint64_t currentUsageInBytes;  ///< Outstanding effect-owned CPU heap allocation size.
+    uint64_t peakUsageInBytes;     ///< Maximum outstanding size since the effect context was created.
+} FfxApiEffectCpuMemoryUsage;
 
 /*
 Tuning varianceFactor and safetyMarginInMs Tips:

@@ -36,6 +36,12 @@
 #define SCALE_PRESET_MODE NSS_SCALE_PRESET_NONE
 #endif
 
+// When set, the pre/post-process shaders read the exposure value from the r_input_exposure texture
+// supplied by the caller instead of the scalar value carried in the constant buffer.
+#ifndef USE_EXPOSURE_TEXTURE
+#define USE_EXPOSURE_TEXTURE 0
+#endif
+
 // Scale preset permutation is intentionally limited to exact 2x and general.
 // The postprocess shader derives the concrete filter implementation from the
 // scale preset and quality mode:
@@ -140,6 +146,9 @@ layout(set = 0, binding = NSS_BIND_CB_NSS, std140) uniform cbNSS_t
 
     int32_t2 _ReducedInputModulo;  // 8 B reduced input denominator, xy order
     int32_t2 _LutOffset;           // 8 B jitter tile offset, xy order
+
+    float2   _JitterCancellation;  // 8 B current minus previous sample-position jitter, in render pixels
+    int32_t2 _JitterPadding;       // 8 B std140 tail padding
 }
 cbNSS;
 
@@ -162,12 +171,7 @@ float4 JitterOffsetTm1()
     return cbNSS._JitterOffsetTm1;
 }
 
-// Temporal / exposure
-half2 Exposure()
-{
-    return half2(cbNSS._Exposure);
-}
-
+// Temporal
 half NotHistoryReset()
 {
     return half(cbNSS._NotHistoryReset);
@@ -176,6 +180,14 @@ half NotHistoryReset()
 float2 MotionVectorScale()
 {
     return cbNSS._MotionVectorScale;
+}
+
+float2 CancelMotionVectorJitter(float2 scaledMotion)
+{
+#if NSS_JITTER_MOTION_VECTORS
+    scaledMotion -= cbNSS._JitterCancellation;
+#endif
+    return scaledMotion;
 }
 
 // Debug view
@@ -294,6 +306,41 @@ float4 GatherDepthQuadTLBR(int32_t2 base, float2 inv_size)
 #if defined(NSS_BIND_UAV_DEPTH_TM1)
 layout(set = 0, binding = NSS_BIND_UAV_DEPTH_TM1, r32ui) coherent uniform uimage2D rw_reconstructed_prev_depth;
 #endif
+
+//-------------------------------------------------------------------------
+// Input: Exposure (1x1 texture). Present only when exposure-texture is enabled.
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_SRV_INPUT_EXPOSURE)
+layout(set = 0, binding = NSS_BIND_SRV_INPUT_EXPOSURE) uniform highp texture2D r_input_exposure;
+#endif
+
+//-------------------------------------------------------------------------
+// Exposure accessors.
+// When USE_EXPOSURE_TEXTURE is enabled and the exposure texture is bound the exposure is read from
+// the texture (its .x channel); otherwise the value carried in the constant buffer is used. A zero or
+// negative stored value is treated as 1.0 so an uninitialised texture does not blow up the result.
+//-------------------------------------------------------------------------
+#if defined(NSS_BIND_CB_NSS)
+half Exposure()
+{
+#if USE_EXPOSURE_TEXTURE && defined(NSS_BIND_SRV_INPUT_EXPOSURE)
+    const float e = texelFetch(r_input_exposure, ivec2(0, 0), 0).x;
+    return half(e > 0.0 ? e : 1.0);
+#else
+    return half(cbNSS._Exposure.x);
+#endif
+}
+
+half InvExposure()
+{
+#if USE_EXPOSURE_TEXTURE && defined(NSS_BIND_SRV_INPUT_EXPOSURE)
+    const float e = texelFetch(r_input_exposure, ivec2(0, 0), 0).x;
+    return half(1.0 / (e > 0.0 ? e : 1.0));
+#else
+    return half(cbNSS._Exposure.y);
+#endif
+}
+#endif  // NSS_BIND_CB_NSS
 
 #define FLT_MIN            1.175494351e-38
 #define MEDIUMP_FLT_MAX    65504.f

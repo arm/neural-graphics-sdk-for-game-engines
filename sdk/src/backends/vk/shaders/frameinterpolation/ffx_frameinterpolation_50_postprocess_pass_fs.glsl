@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #version 450
 #extension GL_EXT_shader_8bit_storage : require
@@ -15,11 +17,13 @@
 // Input: SRV bindings
 //-----------------------------------------------------------------------------
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_OUT_PARAMS_TENSOR               0
-#define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_WARP_FILLED_MOTION_TP1          1
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_WARP_FILLED_FLOW_TM1            2
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_WARP_FILLED_MOTION_TM1          3
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_PREVIOUS_INTERPOLATION_SOURCE   4
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_CURRENT_INTERPOLATION_SOURCE    5
+#define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_OUT_PARAMS_GATE_TENSOR          7
+#define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_INPAINT_RESULT                  8
+#define FFX_ARM_FRAMEINTERPOLATION_BIND_SRV_WARP_MOTION_QDATA_TP1           9
 
 //-----------------------------------------------------------------------------
 // Input: RT bindings

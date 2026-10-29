@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #version 460
 #extension GL_EXT_samplerless_texture_functions : require
@@ -30,6 +32,9 @@
 #define NSS_BIND_SRV_INPUT_DEPTH_TM1                    5   // FFX_NSS_RESOURCE_IDENTIFIER_INPUT_DEPTH_TM1
 #define NSS_BIND_SRV_LUMA_DERIV_TM1                     6   // FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_TM1
 #define NSS_BIND_SRV_DISOCCLUSION_MASK_LQ               7   // FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ
+#if USE_EXPOSURE_TEXTURE
+#define NSS_BIND_SRV_INPUT_EXPOSURE                     9   // FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE
+#endif
 
 //----------------------------------------------------------------------------- 
 // Output: RT bindings + conditional tensor or buffer aliasing for tensor write

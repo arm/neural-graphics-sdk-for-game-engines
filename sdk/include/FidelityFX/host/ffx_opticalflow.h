@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 // @defgroup OpticalFlow
 
@@ -70,8 +72,9 @@ typedef enum FfxOpticalflowPass
 
 typedef enum FfxOpticalflowInitializationFlagBits
 {
-    FFX_OPTICALFLOW_ENABLE_DEPTH_INVERTED    = (1 << 0),
-    FFX_OPTICALFLOW_ENABLE_MV_HINTS_FRAGMENT = (1 << 1),
+    FFX_OPTICALFLOW_ENABLE_DEPTH_INVERTED   = (1 << 0),
+    FFX_OPTICALFLOW_ENABLE_MV_HINTS         = (1 << 1),
+    FFX_OPTICALFLOW_ENABLE_MV_HINTS_COMPUTE = (1 << 2),
 
 } FfxOpticalflowInitializationFlagBits;
 
@@ -91,12 +94,14 @@ typedef struct FfxOpticalFlowContextDescription
 {
     FfxInterface                   backendInterface;       ///< A set of pointers to the backend implementation for FidelityFX SDK
     uint32_t                       flags;                  ///< A collection of <c><i>FfxOpticalflowInitializationFlagBits</i></c>.
-    FfxDimensions2D                resolution;             ///< Display size.
-    FfxDimensions2D                maxRenderSize;          ///< The maximum size that rendering will be performed at.
+    FfxDimensions2D                resolution;             ///< Display size; dimensions must be nonzero and within the signed 32-bit shader range.
+    FfxDimensions2D                maxRenderSize;          ///< Maximum render size; dimensions must be nonzero and within the signed 32-bit shader range.
     FfxFloat32x4x4                 initialViewProjection;  ///< The initial view-projection matrix used to initialize internal state.
     FfxSurfaceFormat               backBufferFormat;
     FfxOpticalFlowGridSize         gridSize;
     FfxOpticalFlowPerformanceLevel performanceLevel;
+    FfxDimensions2D
+        mvDepthSize;  ///< Motion/depth input size; {0, 0} selects maxRenderSize. Partial-zero or dimensions above the signed shader range are rejected.
 } FfxOpticalFlowContextDescription;
 
 /// A structure encapsulating the parameters for dispatching the various passes
@@ -105,13 +110,12 @@ typedef struct FfxOpticalFlowContextDescription
 /// @ingroup ffxOpticalflow
 typedef struct FfxOpticalFlowDispatchDescription
 {
-    FfxCommandList commandList;        ///< The <c><i>FfxCommandList</i></c> to record rendering commands into.
-    FfxResource    color;              ///< A <c><i>FfxResource</i></c> containing the input color buffer
-    FfxResource    depth;              ///< A <c><i>FfxResource</i></c> containing the input depth buffer for computing MV hints
+    FfxCommandList commandList;  ///< The <c><i>FfxCommandList</i></c> to record rendering commands into.
+    FfxResource    color;        ///< A <c><i>FfxResource</i></c> containing the input color buffer
+    FfxResource    depth;        ///< Current depth for MV hints; when enabled, dimensions must match mvDepthSize or maxRenderSize when mvDepthSize is {0, 0}.
     FfxFloat32x4x4 viewProjection;     ///< The view-projection matrix for the current frame
     FfxResource    opticalFlowVector;  ///< A <c><i>FfxResource</i></c> containing the output motion buffer
-    FfxResource
-        depthTm1;  ///< A <c><i>FfxResource</i></c> containing the output depth buffer for the previous frame, used for computing MV hints and motion vectors.
+    FfxResource    depthTm1;           ///< Previous depth for MV hints; when enabled, dimensions must match the input size or resolved lane.
     FfxResource
              colorTm1;  ///< A <c><i>FfxResource</i></c> containing the output color buffer for the previous frame, used for computing MV hints and motion vectors.
     uint32_t meanFlowL1NormHint;  ///< Optional mean L1 norm flow hint. 0 means backend default.
@@ -121,8 +125,8 @@ typedef struct FfxOpticalFlowDispatchDescription
 typedef struct FfxOpticalFlowSharedResourceDescriptions
 {
     FfxCreateResourceDescription opticalFlowVector;
-    FfxCreateResourceDescription depthTm1;
-    FfxCreateResourceDescription depthTm1Next;
+    FfxCreateResourceDescription depthTm1;      ///< Previous depth history at the resolved mvDepthSize.
+    FfxCreateResourceDescription depthTm1Next;  ///< Next depth history at the resolved mvDepthSize.
     FfxCreateResourceDescription colorTm1;
 } FfxOpticalFlowSharedResourceDescriptions;
 
@@ -188,6 +192,8 @@ typedef struct FfxOpticalFlowContext
 ///
 /// @ingroup ffxOpticalflow
 FFX_API FfxErrorCode ffxOpticalFlowContextCreate(FfxOpticalFlowContext* context, FfxOpticalFlowContextDescription* contextDescription);
+
+FFX_API FfxErrorCode ffxOpticalFlowContextGetGpuMemoryUsage(FfxOpticalFlowContext* context, FfxEffectMemoryUsage* vramUsage);
 
 FFX_API FfxErrorCode ffxOpticalFlowGetSharedResourceDescriptions(FfxOpticalFlowContext* context, FfxOpticalFlowSharedResourceDescriptions* SharedResources);
 

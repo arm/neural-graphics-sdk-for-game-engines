@@ -20,6 +20,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #pragma once
 
 #if defined(__cplusplus)
@@ -78,6 +83,7 @@ enum FfxApiMsgType
 {
     FFX_API_MESSAGE_TYPE_ERROR   = 0,
     FFX_API_MESSAGE_TYPE_WARNING = 1,
+    FFX_API_MESSAGE_TYPE_INFO    = 2,
     FFX_API_MESSAGE_TYPE_COUNT
 };
 
@@ -90,6 +96,57 @@ struct ffxConfigureDescGlobalDebug1
     ffxApiMessage          fpMessage;
     uint32_t               debugLevel;
 };
+
+typedef enum FfxApiCaptureOperation
+{
+    FFX_API_CAPTURE_BEGIN  = 0,  ///< Queue a capture using the descriptor settings.
+    FFX_API_CAPTURE_CANCEL = 2,  ///< Stop an active capture early and cancel its incomplete transaction.
+} FfxApiCaptureOperation;
+
+typedef enum FfxApiCapturePhase
+{
+    FFX_API_CAPTURE_PHASE_IDLE      = 0,
+    FFX_API_CAPTURE_PHASE_CAPTURING = 1,
+    FFX_API_CAPTURE_PHASE_DRAINING  = 2,
+} FfxApiCapturePhase;
+
+typedef enum FfxApiCaptureResult
+{
+    FFX_API_CAPTURE_RESULT_NONE      = 0,
+    FFX_API_CAPTURE_RESULT_SUCCESS   = 1,
+    FFX_API_CAPTURE_RESULT_FAILED    = 2,
+    FFX_API_CAPTURE_RESULT_CANCELLED = 3,
+} FfxApiCaptureResult;
+
+#define FFX_API_CONFIGURE_DESC_TYPE_CAPTURE 6u
+typedef struct ffxApiConfigureDescCapture
+{
+    ffxConfigureDescHeader header;
+    uint32_t               operation;  ///< One of FfxApiCaptureOperation.
+    const char*
+             outputDirectory;  ///< BEGIN only: non-null, NUL-terminated output root of at most 512 bytes; copied before ffxConfigure returns. Longer values return FFX_API_RETURN_ERROR_PARAMETER. For a valid descriptor, BEGIN is accepted for an idle context even without environment/property configuration; state-based rejection applies when an API BEGIN is already pending or the context is capturing or draining. Invalid descriptor values return FFX_API_RETURN_ERROR_PARAMETER.
+    uint32_t startDispatch;    ///< First component dispatch eligible for capture.
+    uint32_t frameCount;       ///< Maximum number of frames to request; capture may stop earlier on budget or runtime failure.
+    float    motionVectorUnormBias;   ///< Finite motion-vector conversion bias; use 0.5 for R8G8_UNORM inputs.
+    float    motionVectorUnormScale;  ///< Finite non-zero scale whose bias-adjusted R8G8_UNORM result remains finite; use 2.0 for R8G8_UNORM inputs.
+} ffxApiConfigureDescCapture;
+
+typedef struct FfxApiCaptureStatus
+{
+    // The lifecycle phase and the most recent capture result are independent:
+    // a draining capture can already have a known result.
+    uint32_t phase;            ///< One of FfxApiCapturePhase: IDLE, CAPTURING, or DRAINING.
+    uint32_t result;           ///< One of FfxApiCaptureResult; FAILED is retained after asynchronous failure.
+    uint32_t capturedFrames;   ///< Frames submitted for asynchronous readback; later payload/I/O failure is reported in result.
+    uint32_t requestedFrames;  ///< Requested frame count for the active or most recent capture.
+} FfxApiCaptureStatus;
+
+#define FFX_API_QUERY_DESC_TYPE_CAPTURESTATUS 7u
+typedef struct ffxApiQueryDescCaptureStatus
+{
+    ffxQueryDescHeader   header;
+    FfxApiCaptureStatus* pOutStatus;  ///< Non-null output storage written synchronously by ffxQuery.
+} ffxApiQueryDescCaptureStatus;
 
 #define FFX_API_QUERY_DESC_TYPE_GET_VERSIONS 4u
 struct ffxQueryDescGetVersions
@@ -125,6 +182,10 @@ typedef struct ffxAllocationCallbacks
     ffxDealloc dealloc;
 } ffxAllocationCallbacks;
 
+// Context objects are thread-affine. Calls operating on the same context must
+// be externally serialized by its owning thread. Different contexts may be
+// used concurrently from different threads.
+
 // Creates a FFX object context.
 // Depending on the desc structures provided to this function, the context will be created with the desired version and attributes.
 // Non-zero return indicates error code.
@@ -140,13 +201,21 @@ FFX_API_ENTRY ffxReturnCode_t ffxDestroyContext(ffxContext* context, const ffxAl
 typedef ffxReturnCode_t (*PfnFfxDestroyContext)(ffxContext* context, const ffxAllocationCallbacks* memCb);
 
 // Configures the provided FFX object context.
-// If context is null, configure operates on any global state.
+// Capture configuration is per context; a null context is invalid for capture descriptors.
+// For capture BEGIN, outputDirectory is copied before this function returns.
+// Capture readback and file output are asynchronous; poll capture status with ffxQuery until
+// the phase is IDLE after issuing CANCEL and asynchronous drain completion.
+// Capture BEGIN is accepted while the context is IDLE and no API BEGIN is pending,
+// regardless of whether environment/property configuration exists. An accepted API
+// BEGIN supersedes pending environment/property requests.
+// CANCEL is accepted only while a capture is CAPTURING.
+// CANCEL preserves completed output but discards the incomplete transaction.
 // Non-zero return indicates error code.
 FFX_API_ENTRY ffxReturnCode_t ffxConfigure(ffxContext* context, const ffxConfigureDescHeader* desc);
 typedef ffxReturnCode_t (*PfnFfxConfigure)(ffxContext* context, const ffxConfigureDescHeader* desc);
 
 // Queries the provided FFX object context.
-// If context is null, query operates on any global state.
+// Capture status is written to the descriptor's pOutStatus; the pointer must be valid for the call.
 // Non-zero return indicates error code.
 FFX_API_ENTRY ffxReturnCode_t ffxQuery(ffxContext* context, ffxQueryDescHeader* desc);
 typedef ffxReturnCode_t (*PfnFfxQuery)(ffxContext* context, ffxQueryDescHeader* desc);

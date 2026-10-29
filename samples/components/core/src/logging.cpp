@@ -15,6 +15,11 @@
  * limitations under the License.
  */
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #include "core/util/logging.hpp"
 
 #include "spdlog/cfg/env.h"
@@ -44,7 +49,12 @@ void init()
 	auto logger = spdlog::stdout_color_mt("vkb");
 #endif
 
+#ifdef PLATFORM__ANDROID
+	// Android logcat already supplies the severity letter (I/W/E).
+	logger->set_pattern("%v");
+#else
 	logger->set_pattern(LOGGER_FORMAT);
+#endif
 	logger->set_level(spdlog::level::trace);
 	spdlog::set_default_logger(logger);
 }

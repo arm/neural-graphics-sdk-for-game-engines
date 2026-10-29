@@ -16,6 +16,11 @@
  * limitations under the License.
  */
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #pragma once
 
 #include "common/error.h"
@@ -168,6 +173,15 @@ class Allocated : public vkb::core::VulkanResource<bindingType, HandleType>
 	 * @param size The size of the memory to flush.  Defaults to the entire block of memory.
 	 */
 	void flush(DeviceSizeType offset = 0, DeviceSizeType size = VK_WHOLE_SIZE);
+
+	/**
+	 * @brief Invalidates memory before host reads if it is not HOST_COHERENT.
+	 * This is a no-op for HOST_COHERENT memory.
+	 *
+	 * @param offset The offset into the memory to invalidate. Defaults to 0.
+	 * @param size The size of the memory to invalidate. Defaults to the entire block.
+	 */
+	void invalidate(DeviceSizeType offset = 0, DeviceSizeType size = VK_WHOLE_SIZE);
 
 	/**
 	 * @brief Retrieves a pointer to the host visible memory as an unsigned byte array.
@@ -533,11 +547,27 @@ inline void Allocated<bindingType, HandleType>::flush(DeviceSizeType offset, Dev
 	{
 		if constexpr (bindingType == vkb::BindingType::Cpp)
 		{
-			vmaFlushAllocation(get_memory_allocator(), allocation, static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size));
+			VK_CHECK(vmaFlushAllocation(get_memory_allocator(), allocation, static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size)));
 		}
 		else
 		{
-			vmaFlushAllocation(get_memory_allocator(), allocation, offset, size);
+			VK_CHECK(vmaFlushAllocation(get_memory_allocator(), allocation, offset, size));
+		}
+	}
+}
+
+template <vkb::BindingType bindingType, typename HandleType>
+inline void Allocated<bindingType, HandleType>::invalidate(DeviceSizeType offset, DeviceSizeType size)
+{
+	if (!coherent)
+	{
+		if constexpr (bindingType == vkb::BindingType::Cpp)
+		{
+			VK_CHECK(vmaInvalidateAllocation(get_memory_allocator(), allocation, static_cast<VkDeviceSize>(offset), static_cast<VkDeviceSize>(size)));
+		}
+		else
+		{
+			VK_CHECK(vmaInvalidateAllocation(get_memory_allocator(), allocation, offset, size));
 		}
 	}
 }

@@ -21,8 +21,17 @@
 # cloned and sparse-checked-out to the directories listed in
 # samples/third_party/sparse.tsv, so only the files needed by the sample
 # build are materialized.
+# Use --skip-assets when only third-party source code is needed for scanning.
 
 set -euo pipefail
+
+skip_assets=false
+for arg in "$@"; do
+    case "${arg}" in
+        --skip-assets) skip_assets=true ;;
+        *) printf 'Unknown argument: %s\n' "${arg}" >&2; exit 2 ;;
+    esac
+done
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -52,6 +61,9 @@ build_patterns() {
 # trailing newline.
 tail -n +2 "${manifest_path}" | while IFS=$'\t' read -r rel_path url commit version || [[ -n "${rel_path}" ]]; do
     [[ -z "${rel_path}" ]] && continue
+    if [[ "${skip_assets}" == true && "${rel_path}" == samples/assets ]]; then
+        continue
+    fi
 
     target_path="${repo_root}/${rel_path}"
     echo "==> ${rel_path} @ ${commit}"
@@ -64,7 +76,9 @@ tail -n +2 "${manifest_path}" | while IFS=$'\t' read -r rel_path url commit vers
 
     build_patterns "${rel_path}" "$(get_sparse_paths "${rel_path}")" \
         | git -C "${target_path}" sparse-checkout set --no-cone --stdin
-    git -C "${target_path}" fetch --tags origin
+    # Existing dependency clones may contain stale or locally-created tags.
+    # These clones mirror the manifest remotes, so remote tags should win.
+    git -C "${target_path}" fetch --tags --force origin
     git -C "${target_path}" checkout --force --detach "${commit}"
 done
 

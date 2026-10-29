@@ -1,5 +1,8 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #version 460
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_16bit_storage : require
@@ -27,15 +30,10 @@
 
 //------------------------------------------------------------------------------
 
-// entry-point
-#ifndef FFX_ARM_FRAMEINTERPOLATION_NUM_THREADS
-#define FFX_ARM_FRAMEINTERPOLATION_NUM_THREADS layout (local_size_x = FFX_FRAMEINTERPOLATION_THREAD_GROUP_WIDTH, local_size_y = FFX_FRAMEINTERPOLATION_THREAD_GROUP_HEIGHT, local_size_z = FFX_FRAMEINTERPOLATION_THREAD_GROUP_DEPTH) in;
-#endif // #ifndef FFX_ARM_FRAMEINTERPOLATION_NUM_THREADS
-
-FFX_ARM_FRAMEINTERPOLATION_NUM_THREADS
+layout(local_size_x = FFX_FRAMEINTERPOLATION_WARP_FLOW_TM1_THREAD_GROUP_WIDTH,
+       local_size_y = FFX_FRAMEINTERPOLATION_WARP_FLOW_TM1_THREAD_GROUP_HEIGHT,
+       local_size_z = FFX_FRAMEINTERPOLATION_WARP_FLOW_TM1_THREAD_GROUP_DEPTH) in;
 void main()
 {
     warp_flow_tm1(int32_t2(gl_GlobalInvocationID.xy));
 }
-
-

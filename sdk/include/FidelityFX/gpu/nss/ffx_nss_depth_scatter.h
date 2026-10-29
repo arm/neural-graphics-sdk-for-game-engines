@@ -183,6 +183,7 @@ void DepthScatter(int32_t2 pixel)
     //    Motion from texture is in input (render) pixel space; convert to
     //    scatter-output UV space for reprojection.
     //-------------------------------------------------------------------------
+    result.xy            = CancelMotionVectorJitter(result.xy);
     float  depth_dilated = result.z;
     float2 motion        = result.xy * InvScale();
 #if NSS_DEPTH_SCATTER_QUARTER_RES_INPUT

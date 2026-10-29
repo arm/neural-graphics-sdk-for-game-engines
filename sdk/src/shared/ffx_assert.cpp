@@ -20,19 +20,28 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include <FidelityFX/host/ffx_assert.h>
-#include <stdlib.h>  // for malloc()
+#include "ffx_logging.h"
+
+#include <stdio.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <stdio.h>    // required for sprintf_s
-#include <windows.h>  // required for OutputDebugString()
-#endif                // #ifndef _WIN32
+#include <windows.h>
+#endif
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "Assert";
+}
+static const uint32_t MAX_ASSERT_BUFFER_SIZE = 512;
 
 static FfxAssertCallback s_assertCallback;
 
@@ -51,39 +60,23 @@ bool ffxAssertReport(const char* file, int32_t line, const char* condition, cons
         return true;
     }
 
-    // form the final assertion string and output to the TTY.
-    const size_t bufferSize = snprintf(NULL, 0, "%s(%d): ASSERTION FAILED. %s\n", file, line, message ? message : condition) + 1;
-    char*        tempBuf    = (char*)malloc(bufferSize);
-    if (!tempBuf)
-    {
-        return true;
-    }
+    // Keep assertion reporting allocation-free so it remains usable in failure paths.
+    char        tempBuf[MAX_ASSERT_BUFFER_SIZE] = {};
+    const char* detail                          = message ? message : (condition ? condition : "unspecified assertion");
+    snprintf(tempBuf, sizeof(tempBuf), "%s(%d): ASSERTION FAILED. %s", file, line, detail);
 
-    if (!message)
-    {
-        snprintf(tempBuf, bufferSize, "%s(%d): ASSERTION FAILED. %s\n", file, line, condition);
-    }
-    else
-    {
-        snprintf(tempBuf, bufferSize, "%s(%d): ASSERTION FAILED. %s\n", file, line, message);
-    }
-
-    if (!s_assertCallback)
-    {
-#ifdef _WIN32
-        OutputDebugStringA(tempBuf);
-#else
-        fprintf(stderr, "%s", tempBuf);
-        fflush(stderr);
-#endif
-    }
-    else
+    if (s_assertCallback)
     {
         s_assertCallback(tempBuf);
     }
-
-    // free the buffer.
-    free(tempBuf);
+    else
+    {
+#ifdef _WIN32
+        // For Visual Studio Debugging on Windows
+        OutputDebugStringA(tempBuf);
+#endif
+        ffxLogMessage(ffxLogComponentName(), FFX_MESSAGE_TYPE_ERROR, tempBuf);
+    }
 
     return true;
 }

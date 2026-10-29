@@ -70,6 +70,7 @@ set(FRAMEWORK_FILES
 set(COMMON_FILES
     # Header Files
     common/app_argument_reader.h
+    common/ffx_memory_usage.h
     common/ktx_common.h
     common/vk_common.h
     common/vk_initializers.h
@@ -499,6 +500,7 @@ if(DEFINED FFX_PLATFORM_NAME AND TARGET ${SDK_LIB_NAME})
         ffx_nss_${FFX_PLATFORM_NAME}
         ffx_frameinterpolation_${FFX_PLATFORM_NAME}
         ffx_opticalflow_${FFX_PLATFORM_NAME}
+        ffx_tinyexr
         SPIRV-Tools-opt
         SPIRV-Tools)
 else()
@@ -533,11 +535,22 @@ else()
     set(NGSDK_FFX_SDK_LIB_DIR "${NGSDK_ROOT}/bin/ffx_sdk/${FFX_PLATFORM_NAME}")
 
     target_link_libraries(${PROJECT_NAME} PUBLIC
-        "${NGSDK_ROOT}/bin/${_lib_prefix}ngsdk_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_ROOT}/bin/${_lib_prefix}ngsdk_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}")
+
+    if(EXISTS "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}arm_capture_${FFX_PLATFORM_NAME}${_lib_ext}"
+       OR EXISTS "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}arm_capture_${FFX_PLATFORM_NAME}d${_lib_ext}")
+        target_link_libraries(${PROJECT_NAME} PUBLIC
+            "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}arm_capture_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}")
+    endif()
+
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_logging${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_spdlog${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_backend_vk_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_nss_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_frameinterpolation_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_opticalflow_${FFX_PLATFORM_NAME}${_cfg_postfix}${_lib_ext}"
+        "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}ffx_tinyexr${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}SPIRV-Tools-opt${_cfg_postfix}${_lib_ext}"
         "${NGSDK_FFX_SDK_LIB_DIR}/${_lib_prefix}SPIRV-Tools${_cfg_postfix}${_lib_ext}")
 endif()

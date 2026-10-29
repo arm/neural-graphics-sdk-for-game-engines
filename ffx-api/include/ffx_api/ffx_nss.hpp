@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -69,11 +71,20 @@ namespace ffx
     };
 
     template <>
-    struct struct_type<ffxApiQueryDescNssGetPipelineStageInfo> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_NSS_GETPIPELINESTAGEINFO>
+    struct struct_type<ffxApiQueryDescNssGetGPUMemoryUsage> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_NSS_GPU_MEMORY_USAGE>
     {
     };
 
-    struct QueryDescNssGetPipelineStageInfo : public InitHelper<ffxApiQueryDescNssGetPipelineStageInfo>
+    struct QueryDescNssGetGPUMemoryUsage : public InitHelper<ffxApiQueryDescNssGetGPUMemoryUsage>
+    {
+    };
+
+    template <>
+    struct struct_type<ffxApiQueryDescNssGetCPUMemoryUsage> : std::integral_constant<uint64_t, FFX_API_QUERY_DESC_TYPE_NSS_CPU_MEMORY_USAGE>
+    {
+    };
+
+    struct QueryDescNssGetCPUMemoryUsage : public InitHelper<ffxApiQueryDescNssGetCPUMemoryUsage>
     {
     };
 

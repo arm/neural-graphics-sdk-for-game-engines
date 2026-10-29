@@ -133,7 +133,7 @@ std::map<void*, VkLayerDispatchTable>         g_deviceDispatchTable;
 static constexpr const char* kLayerName = "VK_LAYER_ARM_NG";
 
 // ARM extension feature nodes used to query / inject the ARM ML features
-// plus their sync2 interaction feature.
+// plus their sync2 interaction feature and the SDK's timeline requirement.
 //
 // VK_ARM_data_graph spec lists these "Extension and Version Dependencies":
 //   - Vulkan 1.3
@@ -146,6 +146,7 @@ struct NGFeatureChainNodes
     VkPhysicalDeviceDataGraphFeaturesARM            graph;
     VkPhysicalDeviceDataGraphOpticalFlowFeaturesARM opticalFlow;
     VkPhysicalDeviceSynchronization2Features        sync2;
+    VkPhysicalDeviceTimelineSemaphoreFeatures       timeline;
 
     NGFeatureChainNodes()
     {
@@ -168,6 +169,10 @@ struct NGFeatureChainNodes
         std::memset(&sync2, 0, sizeof(sync2));
         sync2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
         sync2.pNext = nullptr;
+
+        std::memset(&timeline, 0, sizeof(timeline));
+        timeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+        timeline.pNext = nullptr;
     }
 
     void LinkForQuery()
@@ -176,6 +181,7 @@ struct NGFeatureChainNodes
         tensor.pNext      = &graph;
         graph.pNext       = &opticalFlow;
         opticalFlow.pNext = &sync2;
+        sync2.pNext       = &timeline;
     }
 };
 
@@ -197,7 +203,7 @@ static constexpr const char* kExtendedFlagsExtName = "VK_KHR_extended_flags";
  *  - injection request (return value of DecideInjection): should the layer
  *    push this feature struct or extension name into vkCreateDevice?
  *
- * `tensors` / `data_graph` / `sync2` are feature-struct kinds: chain presence
+ * `tensors` / `data_graph` / `sync2` / `timeline_semaphore` are feature-struct kinds: chain presence
  * is checked in pNext.
  * `extended_flags` / `maintenance5` / `deferred_host_operations` are
  * extension-name kinds: chain presence is checked in ppEnabledExtensionNames.
@@ -211,6 +217,7 @@ struct ExtensionFlags
     bool extended_flags;
     bool maintenance5;
     bool deferred_host_operations;
+    bool timeline_semaphore;
 
     bool AnyArmFeature() const
     {
@@ -218,7 +225,7 @@ struct ExtensionFlags
     }
     bool AnyMutation() const
     {
-        return tensors || data_graph || data_graph_optical_flow || sync2 || extended_flags || maintenance5 || deferred_host_operations;
+        return tensors || data_graph || data_graph_optical_flow || sync2 || extended_flags || maintenance5 || deferred_host_operations || timeline_semaphore;
     }
 };
 
@@ -360,6 +367,7 @@ static ExtensionFlags AreExtensionsSupported(VkPhysicalDevice physicalDevice, co
     out.extended_flags           = HasExtension(extensions, kExtendedFlagsExtName);
     out.maintenance5             = HasExtension(extensions, VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     out.deferred_host_operations = HasExtension(extensions, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    out.timeline_semaphore       = features.timeline.timelineSemaphore == VK_TRUE && HasExtension(extensions, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
     return out;
 }
 
@@ -397,6 +405,9 @@ static ExtensionFlags AreExtensionsProvidedByApp(const VkDeviceCreateInfo* pCrea
     // That's why we still mark it provided even when the carrier's bit is VK_FALSE.
     out.sync2 = FindTypedStructure(pCreateInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES) != nullptr ||
                 FindTypedStructure(pCreateInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) != nullptr;
+    // Preserve app-owned timeline carriers and their values, including VK_FALSE.
+    out.timeline_semaphore = FindTypedStructure(pCreateInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES) != nullptr ||
+                             FindTypedStructure(pCreateInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) != nullptr;
 
     // Extension-name kinds.
     const std::vector<const char*> extensions(pCreateInfo->ppEnabledExtensionNames, pCreateInfo->ppEnabledExtensionNames + pCreateInfo->enabledExtensionCount);
@@ -466,12 +477,14 @@ static void ForceEnableSync2InAppChain(const VkDeviceCreateInfo* pCreateInfo)
  * @param physicalDevice  Target physical device.
  * @param table  Instance dispatch table for feature queries.
  * @param deviceApiVersion  VkPhysicalDeviceProperties::apiVersion of the device.
- * @return ExtensionFlags  Injection flags.
+ * @param extensions Enabled extension names, augmented with missing timeline support.
+ * @return ExtensionFlags Injection flags, including supported timeline semaphore additions.
  */
 static ExtensionFlags DecideInjection(const VkDeviceCreateInfo*           pCreateInfo,
                                       VkPhysicalDevice                    physicalDevice,
                                       const VkLayerInstanceDispatchTable& table,
-                                      uint32_t                            deviceApiVersion)
+                                      uint32_t                            deviceApiVersion,
+                                      std::vector<const char*>&           extensions)
 {
     ExtensionFlags out{};
 
@@ -500,6 +513,17 @@ static ExtensionFlags DecideInjection(const VkDeviceCreateInfo*           pCreat
     // AND the app has not already supplied the feature struct. Not injecting
     // them does not affect the base tensor/data_graph path.
     out.data_graph_optical_flow = supported.data_graph_optical_flow && !provided.data_graph_optical_flow;
+
+    // Complete the KHR path even when the app already supplies the feature carrier.
+    if (supported.timeline_semaphore)
+    {
+        if (!HasExtension(extensions, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME))
+        {
+            extensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+            LAYER_LOGI("CreateDevice: will inject %s into enabled extensions list", VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+        }
+        out.timeline_semaphore = !provided.timeline_semaphore;
+    }
 
     if (!out.AnyArmFeature())
     {
@@ -583,7 +607,7 @@ static ExtensionFlags DecideInjection(const VkDeviceCreateInfo*           pCreat
  */
 static const void* BuildEnabledFeaturesChain(const void* originalPNext, const ExtensionFlags& inject, bool hasFeatures2, NGFeatureChainNodes& nodes)
 {
-    assert(inject.AnyArmFeature() || inject.sync2);
+    assert(inject.AnyMutation());
 
     // Start with the original chain as the tail; the const_cast is safe
     // because we never mutate any node we did not allocate ourselves.
@@ -621,6 +645,13 @@ static const void* BuildEnabledFeaturesChain(const void* originalPNext, const Ex
         nodes.sync2.synchronization2 = VK_TRUE;
         prepend(reinterpret_cast<VkBaseOutStructure*>(&nodes.sync2));
         LAYER_LOGI("CreateDevice: injecting VkPhysicalDeviceSynchronization2Features");
+    }
+
+    if (inject.timeline_semaphore)
+    {
+        nodes.timeline.timelineSemaphore = VK_TRUE;
+        prepend(reinterpret_cast<VkBaseOutStructure*>(&nodes.timeline));
+        LAYER_LOGI("CreateDevice: injecting VkPhysicalDeviceTimelineSemaphoreFeatures");
     }
 
     // Only prepend our own features2 head when the app didn't already supply
@@ -686,7 +717,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL NGLayer_CreateDevice(VkPhysicalDevice       
     };
 
     std::vector<const char*> extensions(pCreateInfo->ppEnabledExtensionNames, pCreateInfo->ppEnabledExtensionNames + pCreateInfo->enabledExtensionCount);
-    ExtensionFlags           inject = DecideInjection(pCreateInfo, physicalDevice, idt, deviceApiVersion);
+    ExtensionFlags           inject = DecideInjection(pCreateInfo, physicalDevice, idt, deviceApiVersion, extensions);
     injectIt(inject.tensors, VK_ARM_TENSORS_EXTENSION_NAME, extensions);
     injectIt(inject.data_graph, VK_ARM_DATA_GRAPH_EXTENSION_NAME, extensions);
     injectIt(inject.data_graph_optical_flow, VK_ARM_DATA_GRAPH_OPTICAL_FLOW_EXTENSION_NAME, extensions);
@@ -707,7 +738,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL NGLayer_CreateDevice(VkPhysicalDevice       
 
     // If no ARM extension/feature mutation is requested, preserve app behavior by
     // passing VkDeviceCreateInfo through untouched.
-    if (!inject.AnyMutation())
+    if (!inject.AnyMutation() && extensions.size() == pCreateInfo->enabledExtensionCount)
     {
         LAYER_LOGI("CreateDevice passthrough: no ARM extension or feature mutation");
         VkResult ret = createFunc(physicalDevice, pCreateInfo, pAllocator, pDevice);
@@ -742,13 +773,13 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL NGLayer_CreateDevice(VkPhysicalDevice       
         createFeatures.features2.features = *pCreateInfo->pEnabledFeatures;
     }
 
-    const void* head = BuildEnabledFeaturesChain(pCreateInfo->pNext, inject, hasFeatures2, createFeatures);
+    const void* head = inject.AnyMutation() ? BuildEnabledFeaturesChain(pCreateInfo->pNext, inject, hasFeatures2, createFeatures) : pCreateInfo->pNext;
 
     VkDeviceCreateInfo cloned      = *pCreateInfo;
     cloned.pNext                   = head;
     cloned.enabledExtensionCount   = static_cast<uint32_t>(extensions.size());
     cloned.ppEnabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
-    if (!hasFeatures2)
+    if (!hasFeatures2 && inject.AnyMutation())
     {
         // pEnabledFeatures was absorbed into our local features2 head.
         cloned.pEnabledFeatures = nullptr;

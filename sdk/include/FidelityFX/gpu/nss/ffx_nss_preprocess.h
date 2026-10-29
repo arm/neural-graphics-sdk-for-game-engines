@@ -261,7 +261,7 @@ float2 MotionToPaddedUvDelta(float2 motion)
 float2 LoadMotion(int32_t2 pixel)
 {
     pixel    = clamp(pixel, int32_t2(0), InputDims() - int32_t2(1));
-    float2 v = texelFetch(_MotionTex, pixel, 0).xy * MotionVectorScale();
+    float2 v = CancelMotionVectorJitter(texelFetch(_MotionTex, pixel, 0).xy * MotionVectorScale());
     v *= float(dot(v, v) > kMotionThresholdSq);
     return v;
 }
@@ -408,13 +408,21 @@ float ComputeDepthClipInt(float2 uv, float depth_current, float2 render_size, fl
 // ---------------------------------------------------------------------------
 half3 LoadColourUnjittered(float2 uv)
 {
-    return Tonemap(SafeColour(half3(textureLod(_ColourTex, uv, 0.0).rgb) * half3(Exposure().x)));
+#if NSS_LDR_MODE
+    return clamp(SafeColour(half3(textureLod(_ColourTex, uv, 0.0).rgb)), half3(0.HF), half3(1.HF));
+#else
+    return Tonemap(SafeColour(half3(textureLod(_ColourTex, uv, 0.0).rgb) * half3(Exposure())));
+#endif
 }
 
 half3 LoadColourForDerivativeAtResolvedPixel(int32_t2 sample_coord)
 {
     half3 c = half3(texelFetch(_ColourTex, sample_coord, 0).rgb);
-    c       = max(c * half(Exposure().x), half3(0.HF));
+#if NSS_LDR_MODE
+    c = max(c, half3(0.HF));
+#else
+    c = max(c * Exposure(), half3(0.HF));
+#endif
     return sqrt(c);
 }
 
@@ -429,7 +437,11 @@ half3 LoadColourForDerivativeAtPixel(int32_t2 pixel)
 #if defined(NSS_BIND_SRV_HISTORY_UPSCALED_COLOR)
 half3 WarpHistory(float2 uv)
 {
-    return Tonemap(SafeColour(half3(textureLod(_HistoryTex, uv, 0).rgb) * Exposure().x));
+#if NSS_LDR_MODE
+    return clamp(SafeColour(half3(textureLod(_HistoryTex, uv, 0).rgb)), half3(0.HF), half3(1.HF));
+#else
+    return Tonemap(SafeColour(half3(textureLod(_HistoryTex, uv, 0).rgb) * Exposure()));
+#endif
 }
 #endif
 
@@ -886,7 +898,7 @@ PreProcessLaneData BuildPreProcessLaneData(int32_t2 input_coord)
 
     int32_t2 nearest_input_coord = clamp(lane.input_coord + lane.nearest_offset, int32_t2(0), InputDims() - int32_t2(1));
     lane.motion                  = LoadMotion(nearest_input_coord);
-    // Motion is backward direction in pixel space to match FSR/ASR
+    // Motion is backward direction in pixel space to match the expected upscaling convention.
     lane.reproj_uv = lane.uv + (lane.motion * InvInputDims());
     return lane;
 }
@@ -923,44 +935,11 @@ void Preprocess(int32_t2 tensor_input_pixel)
     float2   uv            = (float2(ref_coord) + float2(0.5)) * InvInputDims();
     float2   uv_pad        = (float2(padded_coord) + float2(0.5)) * InvPaddedDims();
 
-    //-------------------------------------------------------------------------
-    // 2) Depth dilation and nearest-coordinate selection
-    //-------------------------------------------------------------------------
-    float    depth_dilated  = 0.0;
-    int32_t2 nearest_offset = int32_t2(0);
-    FindNearestDepth_4x4(uv, depth_dilated, nearest_offset);
-
-    //-------------------------------------------------------------------------
-    // 3) Motion sampling and reprojection setup
-    //-------------------------------------------------------------------------
-    int32_t2 nearest_input_coord = clamp(ref_coord + nearest_offset, int32_t2(0), InputDims() - int32_t2(1));
-    float2   motion              = LoadMotion(nearest_input_coord);
-
-    // Motion is backward direction in pixel space to match FSR/ASR.
-    float2 reproj_uv   = uv + (motion * InvInputDims());
-    float2 unjitter_uv = uv - (JitterOffset().xy * InvInputDims());
-
-    int32_t2 depth_coord    = InputCoordToDepthCoord(ref_coord);
-    float2   reproj_270p_uv = ((float2(depth_coord) + float2(0.5)) * InvDepthTm1Size()) + (motion * InvInputDims());
-    float2   reproj_pad_uv  = uv_pad + MotionToPaddedUvDelta(motion);
-
-    //-------------------------------------------------------------------------
-    // 4) Disocclusion
-    //-------------------------------------------------------------------------
-    half history_valid = NotHistoryReset();
-#if NSS_PREPROCESS_HALF_RES_INPUT
-    float2 disocclusion_uv   = (float2(process_coord) + float2(0.5)) * InvOutputDims();
-    half   disocclusion_mask = half(textureLod(_DisocclusionMaskLQTex, disocclusion_uv, 0.0).r);
-#else
-    half disocclusion_mask     = half(ComputeDepthClipInt(reproj_270p_uv, depth_dilated, RenderSize(), DeviceToViewDepth()));
-#endif
-    disocclusion_mask *= history_valid;
-
-    //-------------------------------------------------------------------------
-    // 5) Feature preparation for network input tensor
-    //-------------------------------------------------------------------------
-    half3 unjittered_colour_h = LoadColourUnjittered(unjitter_uv);
     half3 lr_warped_history_h;
+
+    //-------------------------------------------------------------------------
+    // 2) Half-resolution lane history and packed-offset output
+    //-------------------------------------------------------------------------
 #if NSS_PREPROCESS_HALF_RES_INPUT
     {
         int32_t2 history_base_input_coord = HalfResProcessCoordToBaseInputCoord(process_coord);
@@ -973,10 +952,56 @@ void Preprocess(int32_t2 tensor_input_pixel)
         PreProcessLaneData history_lane_10 = BuildPreProcessLaneData(history_lane_input_10);
         PreProcessLaneData history_lane_01 = BuildPreProcessLaneData(history_lane_input_01);
         PreProcessLaneData history_lane_11 = BuildPreProcessLaneData(history_lane_input_11);
-        lr_warped_history_h                = AverageWarpedHistory2x2(history_lane_00, history_lane_10, history_lane_01, history_lane_11);
+#if NSS_PACKED_NEAREST_OFFSET_QUAD
+        if (!any(greaterThanEqual(padded_coord, process_dims)))
+        {
+            float4 encoded_quad = EncodeNearestOffsetQuadUNormRG8(
+                history_lane_00.nearest_offset, history_lane_10.nearest_offset, history_lane_01.nearest_offset, history_lane_11.nearest_offset);
+            WriteNearestOffsetOut(padded_coord, encoded_quad);
+        }
+#endif  // NSS_PACKED_NEAREST_OFFSET_QUAD
+        lr_warped_history_h = AverageWarpedHistory2x2(history_lane_00, history_lane_10, history_lane_01, history_lane_11);
     }
+#endif  // NSS_PREPROCESS_HALF_RES_INPUT
+
+    //-------------------------------------------------------------------------
+    // 3) Depth dilation and nearest-coordinate selection
+    //-------------------------------------------------------------------------
+    float    depth_dilated  = 0.0;
+    int32_t2 nearest_offset = int32_t2(0);
+    FindNearestDepth_4x4(uv, depth_dilated, nearest_offset);
+
+    //-------------------------------------------------------------------------
+    // 4) Motion sampling and reprojection setup
+    //-------------------------------------------------------------------------
+    int32_t2 nearest_input_coord = clamp(ref_coord + nearest_offset, int32_t2(0), InputDims() - int32_t2(1));
+    float2   motion              = LoadMotion(nearest_input_coord);
+
+    // Motion is backward direction in pixel space to match the expected upscaling convention.
+    float2   reproj_uv      = uv + (motion * InvInputDims());
+    float2   unjitter_uv    = uv - (JitterOffset().xy * InvInputDims());
+    int32_t2 depth_coord    = InputCoordToDepthCoord(ref_coord);
+    float2   reproj_270p_uv = ((float2(depth_coord) + float2(0.5)) * InvDepthTm1Size()) + (motion * InvInputDims());
+    float2   reproj_pad_uv  = uv_pad + MotionToPaddedUvDelta(motion);
+
+    //-------------------------------------------------------------------------
+    // 5) Disocclusion
+    //-------------------------------------------------------------------------
+    half history_valid = NotHistoryReset();
+#if NSS_PREPROCESS_HALF_RES_INPUT
+    float2 disocclusion_uv   = (float2(process_coord) + float2(0.5)) * InvOutputDims();
+    half   disocclusion_mask = half(textureLod(_DisocclusionMaskLQTex, disocclusion_uv, 0.0).r);
 #else
-    lr_warped_history_h        = WarpHistory(reproj_uv);
+    half  disocclusion_mask    = half(ComputeDepthClipInt(reproj_270p_uv, depth_dilated, RenderSize(), DeviceToViewDepth()));
+#endif
+    disocclusion_mask *= history_valid;
+
+    //-------------------------------------------------------------------------
+    // 6) Feature preparation for network input tensor
+    //-------------------------------------------------------------------------
+    half3 unjittered_colour_h = LoadColourUnjittered(unjitter_uv);
+#if !NSS_PREPROCESS_HALF_RES_INPUT
+    lr_warped_history_h = WarpHistory(reproj_uv);
 #endif  // NSS_PREPROCESS_HALF_RES_INPUT
     lr_warped_history_h *= half3(history_valid);
     half4 deriv_tm1   = LoadDerivativeTm1(reproj_pad_uv) * half4(history_valid);
@@ -997,12 +1022,12 @@ void Preprocess(int32_t2 tensor_input_pixel)
     half  motion_detector = CalculateMotionDetector(motion, RenderSize());
 
     //-------------------------------------------------------------------------
-    // 6) Write network tensor for padded domain
+    // 7) Write network tensor for padded domain
     //-------------------------------------------------------------------------
     WriteToTensor(padded_coord, lr_warped_history_h, unjittered_colour_h, motion_detector, feedback_h, instability);
 
     //-------------------------------------------------------------------------
-    // 7) Write per-frame auxiliary outputs for non-padded region only
+    // 8) Write per-frame auxiliary outputs for non-padded region only
     //-------------------------------------------------------------------------
     if (any(greaterThanEqual(padded_coord, process_dims)))
     {
@@ -1012,25 +1037,7 @@ void Preprocess(int32_t2 tensor_input_pixel)
 
     WriteLumaDerivativeOut(padded_coord, luma);
 
-#if NSS_PACKED_NEAREST_OFFSET_QUAD
-    int32_t2 base_input_coord  = clamp(process_coord * int32_t2(2), int32_t2(0), InputDims() - int32_t2(1));
-    int32_t2 lane_input_00     = base_input_coord;
-    int32_t2 lane_input_10     = min(base_input_coord + int32_t2(1, 0), InputDims() - int32_t2(1));
-    int32_t2 lane_input_01     = min(base_input_coord + int32_t2(0, 1), InputDims() - int32_t2(1));
-    int32_t2 lane_input_11     = min(base_input_coord + int32_t2(1, 1), InputDims() - int32_t2(1));
-    int32_t2 quad_offset_00    = int32_t2(0);
-    int32_t2 quad_offset_10    = int32_t2(0);
-    int32_t2 quad_offset_01    = int32_t2(0);
-    int32_t2 quad_offset_11    = int32_t2(0);
-    float    quad_depth_unused = 0.0;
-    FindNearestDepth_4x4_FromPixel(lane_input_00, InputDims(), quad_depth_unused, quad_offset_00);
-    FindNearestDepth_4x4_FromPixel(lane_input_10, InputDims(), quad_depth_unused, quad_offset_10);
-    FindNearestDepth_4x4_FromPixel(lane_input_01, InputDims(), quad_depth_unused, quad_offset_01);
-    FindNearestDepth_4x4_FromPixel(lane_input_11, InputDims(), quad_depth_unused, quad_offset_11);
-
-    float4 encoded_quad = EncodeNearestOffsetQuadUNormRG8(quad_offset_00, quad_offset_10, quad_offset_01, quad_offset_11);
-    WriteNearestOffsetOut(padded_coord, encoded_quad);
-#else
+#if !NSS_PACKED_NEAREST_OFFSET_QUAD
     WriteNearestOffsetOut(padded_coord, float4(EncodeNearestDepthCoordUNorm(nearest_offset), 0.0, 0.0, 1.0));
 #endif
 }

@@ -291,7 +291,20 @@ bool VulkanStatsProvider::is_supported(const CounterSamplingConfig &sampling_con
 	device_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
 	device_features.pNext = &perf_query_features;
 
-	vkGetPhysicalDeviceFeatures2KHR(device.get_gpu().get_handle(), &device_features);
+	// Prefer the Vulkan 1.1 core entry point because some emulation layers do not
+	// expose the KHR alias. Retain the alias for Vulkan 1.0 extension implementations.
+	if (vkGetPhysicalDeviceFeatures2)
+	{
+		vkGetPhysicalDeviceFeatures2(device.get_gpu().get_handle(), &device_features);
+	}
+	else if (vkGetPhysicalDeviceFeatures2KHR)
+	{
+		vkGetPhysicalDeviceFeatures2KHR(device.get_gpu().get_handle(), &device_features);
+	}
+	else
+	{
+		return false;
+	}
 	if (!perf_query_features.performanceCounterQueryPools)
 	{
 		return false;

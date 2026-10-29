@@ -18,15 +18,22 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
-#include <algorithm>  // for max used inside SPD CPU code.
-#include <cfloat>     // for FLT_EPSILON
-#include <cmath>      // for fabs, abs, sinf, sqrt, etc.
-#include <cstdio>     // for snprintf
-#include <string.h>   // for memset
+#include <algorithm>
+#include <atomic>
+#include <cfloat>
+#include <chrono>
+#include <cinttypes>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
+#include <cstring>
+#include <string.h>
+#include <tuple>
 
 #include "FidelityFX/host/ffx_nss.h"
 #define FFX_CPU
@@ -36,16 +43,71 @@
 
 #include "FidelityFX/host/ffx_util.h"
 
+#include "ffx_logging.h"
+
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-variable"
 #endif
 
 #include "ffx_nss_private.h"
-#include <tuple>
-#include <cmath>
+#include "ffx_nss_jitter_analysis.h"
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "NSS";
+}
+
+static std::atomic<uint64_t> g_nextLogContextId{1};
+static std::atomic<bool>     g_nssVersionLogged{false};
+static std::atomic<bool>     g_unsupportedDeviceLogged{false};
+static constexpr size_t      NSS_LOG_MESSAGE_CAPACITY = 1024;
+
+using NssCpuClock = std::chrono::steady_clock;
+
+/// Dispatch CPU timings.
+struct NssCpuTimings
+{
+    double preScheduleUs;    ///< Pre-processing.
+    double graphScheduleUs;  ///< Data graph.
+    double postScheduleUs;   ///< Post-processing.
+};
+
+/// Per-dispatch diagnostics.
+struct NssDispatchTrace
+{
+    const char*   stage;    ///< Current stage.
+    NssCpuTimings timings;  ///< CPU timings.
+    bool          verbose;  ///< Verbose logging enabled.
+};
+
+static double elapsedMicroseconds(NssCpuClock::time_point begin, NssCpuClock::time_point end)
+{
+    return std::chrono::duration<double, std::micro>(end - begin).count();
+}
+
+static void logNssVersion(FfxLogMessageCallback callback) noexcept
+{
+    constexpr size_t messageCapacity = 96;
+    char             message[messageCapacity];
+    std::snprintf(message, sizeof(message), "event=versions nss_version=%d.%d.%d", FFX_NSS_VERSION_MAJOR, FFX_NSS_VERSION_MINOR, FFX_NSS_VERSION_PATCH);
+    ffxLogMessageOnceToSink(ffxLogComponentName(), FFX_MESSAGE_TYPE_INFO, message, g_nssVersionLogged, callback);
+}
 
 // max queued frames for descriptor management
 static const uint32_t NSS_MAX_QUEUED_FRAMES = 16;
+
+constexpr uint32_t FFX_NSS_MAX_JITTER_ANALYSIS_SAMPLES         = 256;
+constexpr uint32_t FFX_NSS_JITTER_ANALYSIS_MESSAGE_BUFFER_SIZE = 512;
+
+struct NssJitterAnalyzerState
+{
+    bool            active;
+    uint32_t        expectedUniqueCount;
+    uint32_t        sampleCount;
+    FfxDimensions2D renderSize;
+    FfxDimensions2D upscaleSize;
+    NssJitterSample samples[FFX_NSS_MAX_JITTER_ANALYSIS_SAMPLES];
+};
 
 // lists to map shader resource bindpoint name to resource identifier
 typedef struct ResourceBinding
@@ -81,6 +143,7 @@ static const ResourceBinding srvTextureBindingTable[] = {
     {FFX_NSS_RESOURCE_IDENTIFIER_NEAREST_DEPTH_COORD, "r_input_nearest_depth_coord"},
     {FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ, "r_disocclusion_mask_lq"},
     {FFX_NSS_RESOURCE_IDENTIFIER_OFFSET_LUT, "r_offset_lut"},
+    {FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE, "r_input_exposure"},
 
     // Aliased tensors
     {FFX_NSS_RESOURCE_IDENTIFIER_FEEDBACK_TENSOR, "r_temporal_feedback_tensor"},
@@ -136,9 +199,254 @@ static const ResourceBinding uavTensorBindingTable[] = {
 
 static void printMessage(const FfxNssContext_Private* context, const FfxMsgType type, const char* message)
 {
-    if (context && context->contextDescription.fpMessage != nullptr && message != nullptr)
+    char        contextualMessage[NSS_LOG_MESSAGE_CAPACITY];
+    const char* logMessage = message;
+    if (context && message)
     {
-        context->contextDescription.fpMessage(type, message);
+        std::snprintf(contextualMessage,
+                      sizeof(contextualMessage),
+                      "ctx_id=%" PRIu64 " dispatch_id=%" PRIu64 " %s",
+                      context->diagnostics.contextId,
+                      context->diagnostics.dispatchId,
+                      message);
+        logMessage = contextualMessage;
+    }
+    ffxLogMessage(ffxLogComponentName(), type, logMessage, context ? context->contextDescription.fpMessage : nullptr);
+}
+
+static FfxErrorCode logErrorWithCallback(FfxErrorCode          errorCode,
+                                         const char*           errorMessage,
+                                         FfxLogMessageCallback callback = nullptr,
+                                         const char*           funcName = FFX_BUILTIN_FUNCTION)
+{
+    if (callback)
+    {
+        callback(FFX_MESSAGE_TYPE_ERROR, errorMessage);
+    }
+    return ffxLogError(errorCode, errorMessage, funcName);
+}
+
+static FfxErrorCode logDispatchError(FfxNssContext_Private* context, FfxErrorCode errorCode, const char* errorMessage, bool verbose, const char* stage)
+{
+    NssDispatchErrorState& lastError = context->diagnostics.lastError;
+    const bool             repeated  = lastError.code == errorCode && lastError.reason && lastError.stage && std::strcmp(lastError.reason, errorMessage) == 0 &&
+                          std::strcmp(lastError.stage, stage) == 0;
+    lastError = {errorCode, errorMessage, stage};
+    if (verbose || !repeated)
+    {
+        char message[NSS_LOG_MESSAGE_CAPACITY];
+        std::snprintf(message,
+                      sizeof(message),
+                      "event=dispatch_error stage=%s error_code=%d error_name=%s reason=\"%s\" fallback=application_required",
+                      stage,
+                      errorCode,
+                      ffxGetErrorCodeName(errorCode),
+                      errorMessage);
+        printMessage(context, FFX_MESSAGE_TYPE_ERROR, message);
+    }
+    return errorCode;
+}
+
+static void logDispatchResource(
+    const FfxNssContext_Private* context, const char* role, const char* source, const FfxResourceDescription& description, bool present)
+{
+    char message[NSS_LOG_MESSAGE_CAPACITY];
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=dispatch_resource role=%s source=%s present=%u resolution=%ux%u format=%s format_id=%u",
+                  role,
+                  source,
+                  static_cast<unsigned>(present),
+                  description.width,
+                  description.height,
+                  ffxGetSurfaceFormatName(description.format),
+                  static_cast<unsigned>(description.format));
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
+}
+
+static void logDispatchBegin(const FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
+{
+    char message[NSS_LOG_MESSAGE_CAPACITY];
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=dispatch_begin render=%ux%u upscale=%ux%u reset=%u flags=0x%08x debug_view=%u",
+                  params->renderSize.width,
+                  params->renderSize.height,
+                  params->upscaleSize.width,
+                  params->upscaleSize.height,
+                  static_cast<unsigned>(params->reset),
+                  params->flags,
+                  static_cast<unsigned>((params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) != 0));
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=dispatch_camera jitter=%.6gx%.6g fov_y=%.6g near=%.6g far=%.6g exposure=%.6g",
+                  params->jitterOffset.x,
+                  params->jitterOffset.y,
+                  params->cameraFovAngleVertical,
+                  params->cameraNear,
+                  params->cameraFar,
+                  params->exposure);
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=dispatch_motion mv_scale=%.6gx%.6g frame_time_delta_ms=%.6g",
+                  params->motionVectorScale.x,
+                  params->motionVectorScale.y,
+                  params->frameTimeDelta);
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=dispatch_pipeline preprocess=%s postprocess=%s disocclusion_mask=%u dynamic_lut=%u",
+                  (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) != 0 ? "compute" : "fragment",
+                  (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) != 0 ? "compute" : "fragment",
+                  static_cast<unsigned>(context->useDisocclusionMaskPass),
+                  static_cast<unsigned>(context->useDynamicOffsetLut));
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
+    logDispatchResource(context, "color", "application", params->color.description, params->color.resource != nullptr);
+    logDispatchResource(context, "depth", "application", params->depth.description, params->depth.resource != nullptr);
+    logDispatchResource(context, "motion_vectors", "application", params->motionVectors.description, params->motionVectors.resource != nullptr);
+    if ((context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) != 0)
+    {
+        logDispatchResource(
+            context, "history", "managed", context->managedHistoryDescription, context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1].internalIndex != 0);
+    }
+    else
+    {
+        logDispatchResource(context, "history", "application", params->outputTm1.description, params->outputTm1.resource != nullptr);
+    }
+    logDispatchResource(context, "output", "application", params->output.description, params->output.resource != nullptr);
+    if ((params->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) != 0)
+    {
+        logDispatchResource(context, "debug_views", "application", params->debugViews.description, params->debugViews.resource != nullptr);
+    }
+}
+
+static void resetJitterAnalyzer(FfxNssContext_Private* context)
+{
+    NssJitterAnalyzerState* state = context->jitterAnalyzer;
+    if (!state)
+        return;
+
+    state->active              = false;
+    state->expectedUniqueCount = 0;
+    state->sampleCount         = 0;
+}
+
+static void releaseJitterAnalyzer(FfxNssContext_Private* context)
+{
+    delete context->jitterAnalyzer;
+    context->jitterAnalyzer = nullptr;
+}
+
+static NssJitterAnalyzerState* getJitterAnalyzer(FfxNssContext_Private* context)
+{
+    NssJitterAnalyzerState* state = context->jitterAnalyzer;
+    if (!state)
+    {
+        state = new (std::nothrow) NssJitterAnalyzerState{};
+        if (!state)
+        {
+            printMessage(context, FFX_MESSAGE_TYPE_WARNING, "Failed to allocate NSS jitter analyzer state; jitter analysis skipped.");
+            return nullptr;
+        }
+
+        context->jitterAnalyzer = state;
+    }
+
+    return state;
+}
+
+static void reportJitterAnalysis(FfxNssContext_Private* context, const NssJitterAnalysis& analysis)
+{
+    char summary[FFX_NSS_JITTER_ANALYSIS_MESSAGE_BUFFER_SIZE];
+    snprintf(summary,
+             sizeof(summary),
+             "NSS jitter analysis: samples=%u unique=%u/%u score=%u/10 centroid=(%.4f, %.4f) span=(%.4f, %.4f) quadrants=%u/4 "
+             "in_bounds=%.1f%% grid=%.1f%% discrepancy=%.4f spacing_cv=%.4f xy_correlation=%.4f",
+             analysis.sampleCount,
+             analysis.uniqueCount,
+             analysis.expectedUniqueCount,
+             analysis.score,
+             analysis.centroidX,
+             analysis.centroidY,
+             analysis.spanX,
+             analysis.spanY,
+             analysis.quadrantCount,
+             analysis.inBoundsFraction * 100.0f,
+             analysis.gridOccupancy * 100.0f,
+             analysis.starDiscrepancy,
+             analysis.spacingCv,
+             analysis.xyCorrelation);
+    printMessage(context, FFX_MESSAGE_TYPE_WARNING, summary);
+
+    if (analysis.failedChecks != 0)
+    {
+        char issues[FFX_NSS_JITTER_ANALYSIS_MESSAGE_BUFFER_SIZE];
+        snprintf(issues, sizeof(issues), "NSS jitter analysis failed checks (%u):", analysis.failedChecks);
+        const char* names[]  = {"non-finite",
+                               "out-of-range",
+                               "not-centered",
+                               "insufficient-span",
+                               "missing-quadrants",
+                               "grid-coverage",
+                               "star-discrepancy",
+                               "nearest-neighbor-spacing",
+                               "xy-correlation",
+                               "insufficient-unique"};
+        const bool  passed[] = {analysis.finite,
+                               analysis.inBounds,
+                               analysis.centered,
+                               analysis.wideSpan,
+                               analysis.quadrants,
+                               analysis.grid,
+                               analysis.discrepancy,
+                               analysis.spacing,
+                               analysis.correlation,
+                               analysis.enoughUnique};
+
+        for (uint32_t index = 0; index < FFX_COUNTOF(names); ++index)
+        {
+            if (!passed[index])
+            {
+                const size_t used = strlen(issues);
+                snprintf(issues + used, sizeof(issues) - used, " %s", names[index]);
+            }
+        }
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, issues);
+    }
+    else
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_INFO, "NSS jitter analysis passed all checks");
+    }
+}
+
+static void analyzeJitterDispatch(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
+{
+    const uint32_t expectedUniqueCount = std::max(1u, static_cast<uint32_t>(ffxNssGetJitterPhaseCount(params->renderSize.width, params->upscaleSize.width)));
+    NssJitterAnalyzerState* state      = getJitterAnalyzer(context);
+    if (!state)
+        return;
+
+    if (!state->active || state->renderSize.width != params->renderSize.width || state->renderSize.height != params->renderSize.height ||
+        state->upscaleSize.width != params->upscaleSize.width || state->upscaleSize.height != params->upscaleSize.height ||
+        state->expectedUniqueCount != expectedUniqueCount || params->reset)
+    {
+        resetJitterAnalyzer(context);
+        state->active              = true;
+        state->expectedUniqueCount = expectedUniqueCount;
+        state->renderSize          = params->renderSize;
+        state->upscaleSize         = params->upscaleSize;
+    }
+
+    if (state->sampleCount < FFX_NSS_MAX_JITTER_ANALYSIS_SAMPLES)
+        state->samples[state->sampleCount++] = {params->jitterOffset.x, params->jitterOffset.y};
+
+    if (state->sampleCount == expectedUniqueCount || state->sampleCount == FFX_NSS_MAX_JITTER_ANALYSIS_SAMPLES)
+    {
+        const NssJitterAnalysis analysis = AnalyzeNssJitter(state->samples, state->sampleCount, state->expectedUniqueCount);
+        reportJitterAnalysis(context, analysis);
+        resetJitterAnalyzer(context);
     }
 }
 
@@ -190,9 +498,18 @@ static void nssDebugCheckDispatch(FfxNssContext_Private* context, const FfxNssDi
         }
     }
 
-    if (fabs(params->jitterOffset.x) > 1.0f || fabs(params->jitterOffset.y) > 1.0f)
+    const bool useExposureTexture = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE) != 0;
+    if (useExposureTexture)
     {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "jitterOffset contains value outside of expected range [-1.0, 1.0]");
+        if (params->exposureTexture.resource == nullptr)
+        {
+            printMessage(context, FFX_MESSAGE_TYPE_ERROR, "No valid exposure texture provided when FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is set.");
+        }
+    }
+
+    if (fabs(params->jitterOffset.x) > 0.500001f || fabs(params->jitterOffset.y) > 0.500001f)
+    {
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "jitterOffset contains value outside of expected range [-0.5, 0.5]");
     }
 
     if (fabs(params->motionVectorScale.x) > (float)context->contextDescription.renderSize.width ||
@@ -222,7 +539,7 @@ static FfxErrorCode patchResourceBindings(FfxPipelineState* inoutPipeline)
                     break;
             }
             if (mapIndex == (int32_t)resourceIdNameTableCount)
-                return FFX_ERROR_INVALID_ARGUMENT;
+                return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the shader resource binding name is not recognized");
 
             pipelineResourceBindingTable[resourceIndex].resourceIdentifier = resourceIdNameTable[mapIndex].index;
         }
@@ -282,23 +599,22 @@ static uint32_t getPipelinePermutationFlags(FfxNssContext_Private* context)
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_QUANTIZED) ? NSS_SHADER_PERMUTATION_QUANTIZED : 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_DEPTH_INVERTED) ? NSS_SHADER_PERMUTATION_REVERSE_Z : 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_RESAMPLE_BICUBIC) ? NSS_SHADER_PERMUTATION_RESAMPLE_BICUBIC : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION) ? NSS_SHADER_PERMUTATION_JITTER_MOTION_VECTORS : 0;
     flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) ? NSS_SHADER_PERMUTATION_MANAGE_HISTORY : 0;
-    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT) ? NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT : 0;
-    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_POST_PROCESS_FRAGMENT) ? NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE) ? NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE) ? NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE) ? NSS_SHADER_PERMUTATION_EXPOSURE_TEXTURE : 0;
+    flags |= (contextFlags & FFX_NSS_CONTEXT_FLAG_LOW_DYNAMIC_RANGE) ? NSS_SHADER_PERMUTATION_LDR_MODE : 0;
     flags |= (computeSupportTensor) ? NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR : 0;
     flags |= (fragmentSupportTensor) ? NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR : 0;
 
-    const bool require16bit = (contextFlags & FFX_NSS_CONTEXT_FLAG_ALLOW_16BIT) != 0;
-    if (require16bit)
+    const bool requestDisableFp16 = (contextFlags & FFX_NSS_CONTEXT_FLAG_DISABLE_16BIT) != 0;
+    const bool disable16bit       = !fp16Supported || requestDisableFp16;
+    flags |= disable16bit ? NSS_SHADER_PERMUTATION_DISABLE_16BIT : 0;
+
+    if (!fp16Supported && !requestDisableFp16)
     {
-        if (fp16Supported)
-        {
-            flags |= NSS_SHADER_PERMUTATION_ALLOW_16BIT;
-        }
-        else
-        {
-            printMessage(context, FFX_MESSAGE_TYPE_WARNING, "16-bit resources requested but not supported by the device.");
-        }
+        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "FP16 is not enabled by the device; NSS fallback to 32-bit shader permutations.");
     }
 
     // If both axes match exact x2, use the static LUT path for better performance.
@@ -447,13 +763,13 @@ static FfxErrorCode createPipelineStates(FfxNssContext_Private* context, const F
                                                                                               context->effectContextId,
                                                                                               pipeline));
         }
-        patchResourceBindings(pipeline);
+        FFX_VALIDATE(patchResourceBindings(pipeline));
 
         return FFX_OK;
     };
 
-    const bool preProcessUseFragment  = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
-    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    const bool preProcessUseFragment  = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) == 0;
+    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) == 0;
 
     FFX_VALIDATE(CreatePipeline(FFX_NSS_PASS_DEPTH_SCATTER, "NSS-DepthScatter", &context->pipelineNssDepthScatter, false));
     if (context->useDisocclusionMaskPass)
@@ -483,7 +799,7 @@ static FfxErrorCode createPipelineStates(FfxNssContext_Private* context, const F
                                                                                         context->dataGraphSize.width,
                                                                                         context->dataGraphSize.height,
                                                                                         &context->pipelineNssDataGraph));
-    patchResourceBindings(&context->pipelineNssDataGraph);
+    FFX_VALIDATE(patchResourceBindings(&context->pipelineNssDataGraph));
     // END DATA GRAPH
 
     return FFX_OK;
@@ -505,11 +821,16 @@ static FfxErrorCode createResourceFromDescription(FfxNssContext_Private* context
     const FfxResourceStates initialState = (resDesc->usage == FFX_RESOURCE_USAGE_READ_ONLY) ? FFX_RESOURCE_STATE_COMPUTE_READ : FFX_RESOURCE_STATE_GENERIC_UAV;
     const FfxCreateResourceDescription createResourceDescription = {
         FFX_HEAP_TYPE_DEFAULT, resourceDescription, initialState, resDesc->name, resDesc->id, resDesc->initData};
-    return context->contextDescription.backendInterface.fpCreateResource(
+    const FfxErrorCode errorCode = context->contextDescription.backendInterface.fpCreateResource(
         &context->contextDescription.backendInterface, &createResourceDescription, context->effectContextId, &context->srvResources[resDesc->id]);
+    if (errorCode == FFX_OK && resDesc->id == FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1)
+    {
+        context->managedHistoryDescription = resourceDescription;
+    }
+    return errorCode;
 }
 
-static void nssDebugCheckCreate(FfxNssContext_Private* context)
+static void nssLogContextCreate(const FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
     FFX_ASSERT_MESSAGE(context->dataGraphSize.width % FFX_NSS_RESOURCE_ALIGNMENT == 0, "DataGraph width is not aligned!");
@@ -531,92 +852,59 @@ static void nssDebugCheckCreate(FfxNssContext_Private* context)
         return "Unknown";
     };
 
-    const auto getScalePresetModeString = [](const uint32_t mode) -> const char* {
-        switch (static_cast<NssScalePresetMode>(mode))
-        {
-        case NSS_SCALE_PRESET_NONE:
-            return "None";
-        case NSS_SCALE_PRESET_X2:
-            return "x2";
-        default:
-            break;
-        }
-        FFX_ASSERT_MESSAGE(0, "Unknown scale preset mode!");
-        return "Unknown";
-    };
-
-    const FfxNssContextDescription& desc                = context->contextDescription;
-    const uint32_t                  pipelineFlags       = context->pipelineFlags;
-    constexpr uint32_t              MESSAGE_BUFFER_SIZE = 256;
-    char                            message[MESSAGE_BUFFER_SIZE];
-
-    const uint32_t lutGroupsPerTile = offsetLutGroupsPerTile(pipelineFlags);
-    snprintf(message,
-             MESSAGE_BUFFER_SIZE,
-             "\nDepth scatter size = (%u x %u), render size = (%u x %u),  data graph size = (%u x %u), dynamic lut size = ( %u * %u x %u), upscale size = (%u "
-             "x %u).\n",
-             context->depthScatterSize.width,
-             context->depthScatterSize.height,
-             desc.renderSize.width,
-             desc.renderSize.height,
-             context->dataGraphSize.width,
-             context->dataGraphSize.height,
-             lutGroupsPerTile,
-             context->reducedFractionHrSize.width,
-             context->reducedFractionHrSize.height,
-             desc.upscaleSize.width,
-             desc.upscaleSize.height);
-    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
-
-    const uint32_t scalePresetMode = (pipelineFlags & NSS_SHADER_PERMUTATION_SCALE_PRESET_X2) != 0 ? NSS_SCALE_PRESET_X2 : NSS_SCALE_PRESET_NONE;
-    const uint32_t qualityMode     = (pipelineFlags >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK;
+    const FfxNssContextDescription& desc          = context->contextDescription;
+    const uint32_t                  pipelineFlags = context->pipelineFlags;
+    const uint32_t                  qualityMode   = (pipelineFlags >> NSS_SHADER_PERMUTATION_QUALITY_MODE_SHIFT) & NSS_SHADER_QUALITY_MODE_MASK;
     FFX_ASSERT(qualityMode == static_cast<uint32_t>(context->contextDescription.qualityMode));
-    snprintf(message,
-             MESSAGE_BUFFER_SIZE,
-             "\nPipeline flags = 0x%lx, quality mode = %u (%s), scale preset mode = %u (%s=%u/%u x %u/%u), compute tensor ops = %d, fragment tensor ops = %d\n",
-             pipelineFlags,
-             static_cast<uint32_t>(qualityMode),
-             getQualityModeString(qualityMode),
-             scalePresetMode,
-             getScalePresetModeString(scalePresetMode),
-             context->reducedFractionHrSize.width,
-             context->reducedFractionLrSize.width,
-             context->reducedFractionHrSize.height,
-             context->reducedFractionLrSize.height,
-             int((pipelineFlags & NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR) != 0),
-             int((pipelineFlags & NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR) != 0));
-    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
+    const char* preprocessStage  = ((pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) != 0) ? "compute" : "fragment";
+    const char* postprocessStage = ((pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) != 0) ? "compute" : "fragment";
+    const bool  manageHistory    = (pipelineFlags & NSS_SHADER_PERMUTATION_MANAGE_HISTORY) != 0;
+    const float scaleX           = static_cast<float>(desc.upscaleSize.width) / desc.renderSize.width;
+    const float scaleY           = static_cast<float>(desc.upscaleSize.height) / desc.renderSize.height;
+    char        message[NSS_LOG_MESSAGE_CAPACITY];
+    std::snprintf(message,
+                  sizeof(message),
+                  "event=context_create render=%ux%u upscale=%ux%u display=%ux%u scale=%.4fx%.4f quality=%s "
+                  "context_flags=0x%08x pipeline_flags=0x%08x preprocess=%s postprocess=%s history=%s "
+                  "depth_scatter=%ux%u data_graph=%ux%u dynamic_lut=%u lut=%ux%u disocclusion_mask=%u "
+                  "compute_tensor=%u fragment_tensor=%u",
+                  desc.renderSize.width,
+                  desc.renderSize.height,
+                  desc.upscaleSize.width,
+                  desc.upscaleSize.height,
+                  desc.displaySize.width,
+                  desc.displaySize.height,
+                  scaleX,
+                  scaleY,
+                  getQualityModeString(qualityMode),
+                  desc.flags,
+                  pipelineFlags,
+                  preprocessStage,
+                  postprocessStage,
+                  manageHistory ? "managed" : "external",
+                  context->depthScatterSize.width,
+                  context->depthScatterSize.height,
+                  context->dataGraphSize.width,
+                  context->dataGraphSize.height,
+                  static_cast<unsigned>(context->useDynamicOffsetLut),
+                  context->offsetLutSize.width,
+                  context->offsetLutSize.height,
+                  static_cast<unsigned>(context->useDisocclusionMaskPass),
+                  static_cast<unsigned>((pipelineFlags & NSS_SHADER_PERMUTATION_COMPUTE_SUPPORT_TENSOR) != 0),
+                  static_cast<unsigned>((pipelineFlags & NSS_SHADER_PERMUTATION_FRAGMENT_SUPPORT_TENSOR) != 0));
+    printMessage(context, FFX_MESSAGE_TYPE_INFO, message);
 
-    const char* preprocessStage  = ((pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0) ? "fragment" : "compute";
-    const char* postprocessStage = ((pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0) ? "fragment" : "compute";
-    char        disocclusion_mask_str[32];
-    snprintf(disocclusion_mask_str, sizeof(disocclusion_mask_str), "-[disocclusion mask(%s)]-", preprocessStage);
-    snprintf(message,
-             MESSAGE_BUFFER_SIZE,
-             "\nActive Passes: [depth scatter(compute)]%s[preprocess(%s)]-[data graph]%s[postprocess(%s)]-[debug view(%s)]\n",
-             context->useDisocclusionMaskPass ? disocclusion_mask_str : "-",
-             preprocessStage,
-             context->useDynamicOffsetLut ? "-[dynamic lut(compute)]-" : "-",
-             postprocessStage,
-             postprocessStage);
-    printMessage(context, FFX_MESSAGE_TYPE_WARNING, message);
-
-    if (fabs(float(desc.upscaleSize.width) / desc.renderSize.width) - fabs(float(desc.upscaleSize.height) / desc.renderSize.height) > FLT_EPSILON)
+    if (std::fabs(scaleX - scaleY) > FLT_EPSILON)
     {
         printMessage(context, FFX_MESSAGE_TYPE_WARNING, "width/height has different upscale ratio");
     }
 
-    if (float(desc.upscaleSize.width) / desc.renderSize.width - 2.0f > FLT_EPSILON)
+    if (scaleX - 2.0f > FLT_EPSILON)
     {
         printMessage(context, FFX_MESSAGE_TYPE_WARNING, "It's recommanded to use upscale ratio less than x2.");
     }
 
-    const bool manageHistory = (pipelineFlags & NSS_SHADER_PERMUTATION_MANAGE_HISTORY) != 0;
-    if (manageHistory)
-    {
-        printMessage(context, FFX_MESSAGE_TYPE_WARNING, "FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is set, the SDK will manage the history texture internally.");
-    }
-    else
+    if (!manageHistory)
     {
         printMessage(
             context, FFX_MESSAGE_TYPE_WARNING, "FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY is not set, the user must provide valid history texture each dispatch.");
@@ -630,7 +918,8 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
 
     // Setup the data for implementation.
     memset(context, 0, sizeof(FfxNssContext_Private));
-    context->device = contextDescription->backendInterface.device;
+    context->device                = contextDescription->backendInterface.device;
+    context->diagnostics.contextId = g_nextLogContextId.fetch_add(1, std::memory_order_relaxed);
 
     memcpy(&context->contextDescription, contextDescription, sizeof(FfxNssContextDescription));
 
@@ -645,24 +934,45 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
         printMessage(context, FFX_MESSAGE_TYPE_ERROR, "Failed to create backend interface for NSS context.");
         return errorCode;
     }
+    context->backendContextCreated = true;
 
     // Register the message callback for backend
-    errorCode = context->contextDescription.backendInterface.fpSetMessageCallback(&context->contextDescription.backendInterface,
-                                                                                  reinterpret_cast<FfxBackendMessage>(contextDescription->fpMessage));
+    errorCode = context->contextDescription.backendInterface.fpSetMessageCallback(&context->contextDescription.backendInterface, contextDescription->fpMessage);
     FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
 
     // call out for device caps.
-    FfxDeviceCapabilities capabilities;
+    FfxDeviceCapabilities capabilities{};
     FFX_VALIDATE(context->contextDescription.backendInterface.fpGetDeviceCapabilities(&context->contextDescription.backendInterface, &capabilities));
 
     const bool neuralGraphicsSupported = capabilities.tensorSupported && capabilities.dataGraphSupported;
     if (!neuralGraphicsSupported)
     {
+        context->unsupportedDevice = true;
+        if (!g_unsupportedDeviceLogged.exchange(true, std::memory_order_relaxed))
+        {
+            char message[NSS_LOG_MESSAGE_CAPACITY];
+            std::snprintf(message,
+                          sizeof(message),
+                          "event=device_unsupported stage=context_create error_code=%d error_name=%s "
+                          "tensor_supported=%u data_graph_supported=%u reason_code=missing_neural_capability "
+                          "reason=required_neural_features_unavailable fallback=application_required",
+                          static_cast<FfxErrorCode>(FFX_ERROR_NULL_DEVICE),
+                          ffxGetErrorCodeName(FFX_ERROR_NULL_DEVICE),
+                          static_cast<unsigned>(capabilities.tensorSupported),
+                          static_cast<unsigned>(capabilities.dataGraphSupported));
+            printMessage(context, FFX_MESSAGE_TYPE_ERROR, message);
+        }
+        return FFX_ERROR_NULL_DEVICE;
+    }
+
+    if ((contextDescription->flags & FFX_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE) && !capabilities.r11g11b10StorageImageSupported)
+    {
+        context->unsupportedDevice = true;
         printMessage(context,
                      FFX_MESSAGE_TYPE_ERROR,
-                     "NSS requires device with support for tensors and data graphs. "
-                     "Please check device capabilities.");
-        return FFX_ERROR_NULL_DEVICE;
+                     "NSS compute postprocess requires optimal-tiling R11G11B10 storage-image support and shaderStorageImageExtendedFormats; "
+                     "select the fragment postprocess or use a compatible Vulkan device.");
+        return FFX_ERROR_INVALID_ARGUMENT;
     }
 
     // set defaults
@@ -684,8 +994,8 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
                                                      ? FFX_SURFACE_FORMAT_R8_SINT
                                                      : FFX_SURFACE_FORMAT_R32_FLOAT;
 
-    const bool                 preProcessUseFragment            = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
-    const bool                 postProcessUseFragment           = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    const bool                 preProcessUseFragment            = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) == 0;
+    const bool                 postProcessUseFragment           = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) == 0;
     const FfxResourceUsage     preProcessOutputImageUsage       = preProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
     const FfxResourceUsage     disocclusionMaskOutputImageUsage = preProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
     const FfxResourceUsage     postProcessOutputImageUsage      = postProcessUseFragment ? FFX_RESOURCE_USAGE_RENDERTARGET : FFX_RESOURCE_USAGE_UAV;
@@ -755,9 +1065,6 @@ static FfxErrorCode nssCreate(FfxNssContext_Private* context, const FfxNssContex
         context->reducedFractionLrSize.width  = 1;
         context->reducedFractionLrSize.height = 1;
     }
-
-    // Always print debug info at context creation.
-    nssDebugCheckCreate(context);
 
     constexpr uint32_t inputTensorChannel    = 12;
     constexpr uint32_t feedbackTensorChannel = 4;
@@ -969,6 +1276,8 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
 {
     FFX_ASSERT(context);
 
+    releaseJitterAnalyzer(context);
+
     ffxSafeReleasePipeline(&context->contextDescription.backendInterface, &context->pipelineNssDepthScatter, context->effectContextId);
     if (context->useDisocclusionMaskPass)
     {
@@ -1000,6 +1309,9 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
         }
     }
 
+    // INPUT_EXPOSURE is caller-owned and must not be released as an internal resource.
+    context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE] = {FFX_NSS_RESOURCE_IDENTIFIER_NULL};
+
     // release internal resources
     for (int32_t currentResourceIndex = 0; currentResourceIndex < FFX_NSS_RESOURCE_IDENTIFIER_COUNT; ++currentResourceIndex)
     {
@@ -1008,6 +1320,7 @@ static FfxErrorCode nssRelease(FfxNssContext_Private* context)
 
     // Destroy the context
     FFX_VALIDATE(context->contextDescription.backendInterface.fpDestroyBackendContext(&context->contextDescription.backendInterface, context->effectContextId));
+    context->backendContextCreated = false;
 
     return FFX_OK;
 }
@@ -1113,7 +1426,27 @@ static float ComputeDepthClipPower(const FfxNssDispatchDescription* params)
     return 1.0f + (2.0f * resolutionFactor);
 }
 
-static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
+void UpdateNssJitterConstants(NssConstants& constants, const FfxNssDispatchDescription& params, bool resetHistory, bool cancelMotionJitter)
+{
+    const float jitter[4] = {params.jitterOffset.x,
+                             params.jitterOffset.y,
+                             params.jitterOffset.x / static_cast<float>(params.renderSize.width),
+                             params.jitterOffset.y / static_cast<float>(params.renderSize.height)};
+    for (uint32_t i = 0; i < 4; ++i)
+    {
+        constants._JitterOffsetTm1[i] = resetHistory ? jitter[i] : constants._JitterOffset[i];
+        constants._JitterOffset[i]    = jitter[i];
+    }
+
+    // NSS samples at pixel + jitter, so raster positions are p - jitter.
+    // Backward jittered motion therefore contains currentJitter - previousJitter.
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        constants._JitterCancellation[i] = cancelMotionJitter ? constants._JitterOffset[i] - constants._JitterOffsetTm1[i] : 0.0f;
+    }
+}
+
+static FfxErrorCode setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
 {
     NssConstants& constants        = context->constants;
     const bool    needResetHistory = NeedResetHistory(context, params);
@@ -1140,26 +1473,8 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     constants._InputTensorSizeRcp[0] = 1.0f / static_cast<float>(context->dataGraphSize.width);
     constants._InputTensorSizeRcp[1] = 1.0f / static_cast<float>(context->dataGraphSize.height);
 
-    // JitterOffset in pixels/uv.
-    // On history reset, mirror current jitter into tm1 to avoid a mismatched first temporal phase.
-    if (needResetHistory)
-    {
-        constants._JitterOffsetTm1[0] = params->jitterOffset.x;
-        constants._JitterOffsetTm1[1] = params->jitterOffset.y;
-        constants._JitterOffsetTm1[2] = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
-        constants._JitterOffsetTm1[3] = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
-    }
-    else
-    {
-        constants._JitterOffsetTm1[0] = constants._JitterOffset[0];
-        constants._JitterOffsetTm1[1] = constants._JitterOffset[1];
-        constants._JitterOffsetTm1[2] = constants._JitterOffset[2];
-        constants._JitterOffsetTm1[3] = constants._JitterOffset[3];
-    }
-    constants._JitterOffset[0] = params->jitterOffset.x;
-    constants._JitterOffset[1] = params->jitterOffset.y;
-    constants._JitterOffset[2] = params->jitterOffset.x / static_cast<float>(params->renderSize.width);
-    constants._JitterOffset[3] = params->jitterOffset.y / static_cast<float>(params->renderSize.height);
+    UpdateNssJitterConstants(
+        constants, *params, needResetHistory, (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION) != 0);
 
     // Setup scale factor (.xy scale, .zw inv_scale)
     constants._ScaleFactor[0] = constants._OutputDims[0] / FfxFloat32(constants._InputDims[0]);
@@ -1222,19 +1537,18 @@ static void setupConstantBuffer(FfxNssContext_Private* context, const FfxNssDisp
     constants._NotHistoryReset       = noHistoryReset;
 
     // initialize constantBuffers data
-    FFX_ASSERT(context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
-                                                                                          &context->constants,
-                                                                                          sizeof(context->constants),
-                                                                                          &context->constantBuffers[FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS]) ==
-               FFX_OK);
+    return context->contextDescription.backendInterface.fpStageConstantBufferDataFunc(&context->contextDescription.backendInterface,
+                                                                                      &context->constants,
+                                                                                      sizeof(context->constants),
+                                                                                      &context->constantBuffers[FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS]);
 }
 
-static void scheduleDispatch(FfxNssContext_Private*           context,
-                             const FfxNssDispatchDescription* params,
-                             const FfxPipelineState*          pipeline,
-                             uint32_t                         dispatchX,
-                             uint32_t                         dispatchY,
-                             const char*                      debugName)
+static FfxErrorCode scheduleDispatch(FfxNssContext_Private*           context,
+                                     const FfxNssDispatchDescription* params,
+                                     const FfxPipelineState*          pipeline,
+                                     uint32_t                         dispatchX,
+                                     uint32_t                         dispatchY,
+                                     const char*                      debugName)
 {
     FfxGpuJobDescription dispatchJob = {FFX_GPU_JOB_COMPUTE};
     if (debugName != nullptr)
@@ -1334,15 +1648,15 @@ static void scheduleDispatch(FfxNssContext_Private*           context,
             context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
     }
 
-    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob) == FFX_OK);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
 }
 
-static void scheduleFragment(FfxNssContext_Private*           context,
-                             const FfxNssDispatchDescription* params,
-                             const FfxPipelineState*          pipeline,
-                             uint32_t                         width,
-                             uint32_t                         height,
-                             const char*                      debugName)
+static FfxErrorCode scheduleFragment(FfxNssContext_Private*           context,
+                                     const FfxNssDispatchDescription* params,
+                                     const FfxPipelineState*          pipeline,
+                                     uint32_t                         width,
+                                     uint32_t                         height,
+                                     const char*                      debugName)
 {
     FFX_UNUSED(params);
 
@@ -1423,10 +1737,13 @@ static void scheduleFragment(FfxNssContext_Private*           context,
             context->constantBuffers[pipeline->constantBufferBindings[currentRootConstantIndex].resourceIdentifier];
     }
 
-    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &fragmentJob) == FFX_OK);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &fragmentJob);
 }
 
-static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, FfxPipelineState* pipeline, const char* debugName)
+static FfxErrorCode scheduleDataGraph(FfxNssContext_Private*           context,
+                                      const FfxNssDispatchDescription* params,
+                                      FfxPipelineState*                pipeline,
+                                      const char*                      debugName)
 {
     FfxGpuJobDescription dataGraphJob = {FFX_GPU_JOB_DATA_GRAPH};
     if (debugName != nullptr)
@@ -1465,17 +1782,60 @@ static void scheduleDataGraph(FfxNssContext_Private* context, const FfxNssDispat
 
     dataGraphJob.dataGraphJobDescription.pipeline = *pipeline;
 
-    FFX_ASSERT(context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dataGraphJob) == FFX_OK);
+    return context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dataGraphJob);
 }
 
-static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDispatchDescription* params)
+/// @cond
+struct NssDispatchBackendScope
+{
+    FfxNssContext_Private* context;
+    FfxCommandList         commandList;
+    bool                   cleanupAttempted = false;
+    bool                   completed        = false;
+
+    ~NssDispatchBackendScope() noexcept
+    {
+        if (completed)
+        {
+            return;
+        }
+
+        context->requiresRecreation = true;
+        if (!cleanupAttempted)
+        {
+            const FfxErrorCode cleanupError = context->contextDescription.backendInterface.fpUnregisterResources(
+                &context->contextDescription.backendInterface, commandList, context->effectContextId);
+            if (cleanupError != FFX_OK)
+            {
+                logErrorWithCallback(cleanupError, "failed to abort NSS dispatch", context->contextDescription.fpMessage);
+            }
+        }
+    }
+
+    FfxErrorCode Complete() noexcept
+    {
+        cleanupAttempted                = true;
+        const FfxErrorCode cleanupError = context->contextDescription.backendInterface.fpUnregisterResources(
+            &context->contextDescription.backendInterface, commandList, context->effectContextId);
+        completed = cleanupError == FFX_OK;
+        return cleanupError;
+    }
+};
+/// @endcond
+
+static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDispatchDescription* params, NssDispatchTrace& trace)
 {
     FFX_ASSERT(context);
     FFX_ASSERT(params);
+    trace.stage = "setup";
 
     if ((params->flags & FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING)
     {
         nssDebugCheckDispatch(context, params);
+    }
+    else
+    {
+        releaseJitterAnalyzer(context);
     }
 
     // validate the required textures are provided
@@ -1495,8 +1855,21 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
         FFX_RETURN_ON_ERROR(params->outputTm1.resource != NULL, FFX_ERROR_INVALID_POINTER);
     }
 
+    // When the caller opts into reading exposure from a texture, a valid texture is required each dispatch.
+    const bool useExposureTexture = (context->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE) != 0;
+    if (useExposureTexture)
+    {
+        FFX_RETURN_ON_ERROR(params->exposureTexture.resource != NULL, FFX_ERROR_INVALID_POINTER);
+    }
+
+    if ((params->flags & FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING) == FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING)
+    {
+        analyzeJitterDispatch(context, params);
+    }
+
     // take a short cut to the command list
-    FfxCommandList commandList = params->commandList;
+    FfxCommandList          commandList = params->commandList;
+    NssDispatchBackendScope backendScope{context, commandList};
 
     FfxGpuJobDescription clearJob = {FFX_GPU_JOB_CLEAR_FLOAT};
 
@@ -1504,6 +1877,7 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     memcpy(clearJob.clearJobDescriptor.color, clearValuesToZeroFloat, 4 * sizeof(float));
 
     const bool resetAccumulation = NeedResetHistory(context, params);
+    trace.stage                  = "reset_history";
     if (resetAccumulation)
     {
         constexpr uint32_t always_clear_resources[] = {FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1,
@@ -1535,9 +1909,10 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
     const uint32_t lumaDerivUavResourceIndex = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_1 : FFX_NSS_RESOURCE_IDENTIFIER_LUMA_DERIV_2;
     const uint32_t uavHistoryResourceIndex   = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1 : FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2;
     const uint32_t srvHistoryResourceIndex   = isOddFrame ? FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_2 : FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_1;
-    const bool     preProcessUseFragment     = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
+    const bool     preProcessUseFragment     = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_COMPUTE) == 0;
 
     // Setup the resources for pre-process stage
+    trace.stage = "resources";
     {
         // Input: Depth tm1
         // This is already setup in nssCreate(), nothing to do here.
@@ -1575,6 +1950,14 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
                                                                                 &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_HISTORY_UPSCALED_COLOR]));
         }
 
+        // Input: Exposure texture.
+        if (useExposureTexture)
+        {
+            FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
+                                                                                         &params->exposureTexture,
+                                                                                         context->effectContextId,
+                                                                                         &context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE]));
+        }
         // Input: Feedback tm1
         // This is already setup in nssCreate(), nothing to do here.
 
@@ -1637,9 +2020,17 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
         context->srvResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT] = context->uavResources[FFX_NSS_RESOURCE_IDENTIFIER_UPSCALED_OUTPUT];
     }
 
-    setupConstantBuffer(context, params);
+    trace.stage = "constants";
+    FFX_VALIDATE(setupConstantBuffer(context, params));
+
+    NssCpuClock::time_point stageStart{};
+    if (trace.verbose)
+    {
+        stageStart = NssCpuClock::now();
+    }
 
     // Depth scatter
+    trace.stage = "preprocess";
     {
         FfxGpuJobDescription clearJob     = {FFX_GPU_JOB_CLEAR_UINT};
         const bool           reverseDepth = (context->pipelineFlags & NSS_SHADER_PERMUTATION_REVERSE_Z) != 0;
@@ -1659,58 +2050,79 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
 
         const int32_t dispatchX = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
         const int32_t dispatchY = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-        scheduleDispatch(context, params, &context->pipelineNssDepthScatter, dispatchX, dispatchY, "DepthScatter");
+        FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssDepthScatter, dispatchX, dispatchY, "DepthScatter"));
     }
 
     if (context->useDisocclusionMaskPass)
     {
         if (preProcessUseFragment)
         {
-            scheduleFragment(
-                context, params, &context->pipelineNssDisocclusionMask, context->depthScatterSize.width, context->depthScatterSize.height, "DisocclusionMask");
+            FFX_VALIDATE(scheduleFragment(
+                context, params, &context->pipelineNssDisocclusionMask, context->depthScatterSize.width, context->depthScatterSize.height, "DisocclusionMask"));
         }
         else
         {
             const int32_t dispatchX = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
             const int32_t dispatchY = FFX_DIVIDE_ROUNDING_UP(context->depthScatterSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-            scheduleDispatch(context, params, &context->pipelineNssDisocclusionMask, dispatchX, dispatchY, "DisocclusionMask");
+            FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssDisocclusionMask, dispatchX, dispatchY, "DisocclusionMask"));
         }
     }
 
     if (preProcessUseFragment)
     {
-        scheduleFragment(context, params, &context->pipelineNssPreprocess, context->dataGraphSize.width, context->dataGraphSize.height, "Preprocess");
+        FFX_VALIDATE(
+            scheduleFragment(context, params, &context->pipelineNssPreprocess, context->dataGraphSize.width, context->dataGraphSize.height, "Preprocess"));
     }
     else
     {
         const int32_t dispatchSrcX = FFX_DIVIDE_ROUNDING_UP(context->dataGraphSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
         const int32_t dispatchSrcY = FFX_DIVIDE_ROUNDING_UP(context->dataGraphSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-        scheduleDispatch(context, params, &context->pipelineNssPreprocess, dispatchSrcX, dispatchSrcY, "Preprocess");
+        FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssPreprocess, dispatchSrcX, dispatchSrcY, "Preprocess"));
     }
 
-    scheduleDataGraph(context, params, &context->pipelineNssDataGraph, "DataGraph");
+    if (trace.verbose)
+    {
+        const auto now              = NssCpuClock::now();
+        trace.timings.preScheduleUs = elapsedMicroseconds(stageStart, now);
+        stageStart                  = now;
+    }
+    trace.stage = "data_graph";
+    FFX_VALIDATE(scheduleDataGraph(context, params, &context->pipelineNssDataGraph, "DataGraph"));
+    if (trace.verbose)
+    {
+        const auto now                = NssCpuClock::now();
+        trace.timings.graphScheduleUs = elapsedMicroseconds(stageStart, now);
+        stageStart                    = now;
+    }
 
+    trace.stage = "postprocess";
     if (context->useDynamicOffsetLut)
     {
         const uint32_t tileCount    = context->reducedFractionHrSize.width * context->reducedFractionHrSize.height;
         const uint32_t dispatchLutX = FFX_DIVIDE_ROUNDING_UP(tileCount, 64u);
-        scheduleDispatch(context, params, &context->pipelineNssGenerateOffsetLut, dispatchLutX, 1, "GenerateOffsetLut");
+        FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssGenerateOffsetLut, dispatchLutX, 1, "GenerateOffsetLut"));
     }
 
-    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
+    const bool postProcessUseFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_COMPUTE) == 0;
     if (postProcessUseFragment)
     {
-        scheduleFragment(context, params, &context->pipelineNssPostprocess, params->upscaleSize.width, params->upscaleSize.height, "Postprocess");
+        FFX_VALIDATE(scheduleFragment(context, params, &context->pipelineNssPostprocess, params->upscaleSize.width, params->upscaleSize.height, "Postprocess"));
     }
     else
     {
         const int32_t dispatchDstX = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
         const int32_t dispatchDstY = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-        scheduleDispatch(context, params, &context->pipelineNssPostprocess, dispatchDstX, dispatchDstY, "Postprocess");
+        FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssPostprocess, dispatchDstX, dispatchDstY, "Postprocess"));
+    }
+
+    if (trace.verbose)
+    {
+        trace.timings.postScheduleUs = elapsedMicroseconds(stageStart, NssCpuClock::now());
     }
 
     if (hasDebugView)
     {
+        trace.stage = "debug_view";
         FFX_VALIDATE(context->contextDescription.backendInterface.fpRegisterResource(&context->contextDescription.backendInterface,
                                                                                      &params->debugViews,
                                                                                      context->effectContextId,
@@ -1720,106 +2132,328 @@ static FfxErrorCode nssDispatch(FfxNssContext_Private* context, const FfxNssDisp
         // Assume the debug view compute/fragment choice is same as the post process.
         if (postProcessUseFragment)
         {
-            scheduleFragment(context, params, &context->pipelineNssDebugView, params->upscaleSize.width, params->upscaleSize.height, "DebugView");
+            FFX_VALIDATE(scheduleFragment(context, params, &context->pipelineNssDebugView, params->upscaleSize.width, params->upscaleSize.height, "DebugView"));
         }
         else
         {
             const int32_t dispatchDbgX = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.width, FFX_NSS_THREAD_GROUP_WIDTH);
             const int32_t dispatchDbgY = FFX_DIVIDE_ROUNDING_UP(params->upscaleSize.height, FFX_NSS_THREAD_GROUP_HEIGHT);
-            scheduleDispatch(context, params, &context->pipelineNssDebugView, dispatchDbgX, dispatchDbgY, "DebugView");
+            FFX_VALIDATE(scheduleDispatch(context, params, &context->pipelineNssDebugView, dispatchDbgX, dispatchDbgY, "DebugView"));
         }
     }
 
-    context->resourceFrameIndex = (context->resourceFrameIndex + 1) % NSS_MAX_QUEUED_FRAMES;
-    // NSS_MAX_QUEUED_FRAMES must be an even number.
-    FFX_STATIC_ASSERT((NSS_MAX_QUEUED_FRAMES & 1) == 0);
-
+    trace.stage = "record_commands";
     FFX_VALIDATE(
         context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList, context->effectContextId));
 
     // release dynamic resources
-    FFX_VALIDATE(context->contextDescription.backendInterface.fpUnregisterResources(
-        &context->contextDescription.backendInterface, commandList, context->effectContextId));
+    trace.stage = "unregister_resources";
+    FFX_VALIDATE(backendScope.Complete());
 
-    context->firstExecution = false;
+    // NSS_MAX_QUEUED_FRAMES must be an even number.
+    FFX_STATIC_ASSERT((NSS_MAX_QUEUED_FRAMES & 1) == 0);
+    context->resourceFrameIndex = (context->resourceFrameIndex + 1) % NSS_MAX_QUEUED_FRAMES;
+    context->firstExecution     = false;
     return FFX_OK;
 }
 
 FfxErrorCode ffxNssContextCreate(FfxNssContext* context, const FfxNssContextDescription* contextDescription)
 {
     // check pointers are valid.
-    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
+    if (!context)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "context creation requires a context");
+    }
     // zero context memory
     memset(context, 0, sizeof(FfxNssContext));
 
-    FFX_RETURN_ON_ERROR(contextDescription, FFX_ERROR_INVALID_POINTER);
+    if (!contextDescription)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "context creation requires a description");
+    }
 
-    // validate that all callbacks are set for the interface
-    FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpCreateBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
-    FFX_RETURN_ON_ERROR(contextDescription->backendInterface.fpDestroyBackendContext, FFX_ERROR_INCOMPLETE_INTERFACE);
+    const FfxInterface& backend          = contextDescription->backendInterface;
+    constexpr uint32_t  allComputeFlags  = FFX_NSS_CONTEXT_FLAG_PRE_PROCESS_COMPUTE | FFX_NSS_CONTEXT_FLAG_POST_PROCESS_COMPUTE;
+    const bool          requiresGraphics = (contextDescription->flags & allComputeFlags) != allComputeFlags;
+    const struct
+    {
+        bool        present;
+        const char* name;
+    } requiredCallbacks[] = {
+        {backend.fpCreateBackendContext != nullptr, "fpCreateBackendContext"},
+        {backend.fpDestroyBackendContext != nullptr, "fpDestroyBackendContext"},
+        {backend.fpGetDeviceCapabilities != nullptr, "fpGetDeviceCapabilities"},
+        {backend.fpSetMessageCallback != nullptr, "fpSetMessageCallback"},
+        {backend.fpCreateResource != nullptr, "fpCreateResource"},
+        {backend.fpDestroyResource != nullptr, "fpDestroyResource"},
+        {backend.fpCreateComputePipeline != nullptr, "fpCreateComputePipeline"},
+        {!requiresGraphics || backend.fpCreateGraphicsPipeline != nullptr, "fpCreateGraphicsPipeline"},
+        {backend.fpCreateDataGraphPipeline != nullptr, "fpCreateDataGraphPipeline"},
+        {backend.fpDestroyPipeline != nullptr, "fpDestroyPipeline"},
+        {backend.fpRegisterResource != nullptr, "fpRegisterResource"},
+        {backend.fpUnregisterResources != nullptr, "fpUnregisterResources"},
+        {backend.fpStageConstantBufferDataFunc != nullptr, "fpStageConstantBufferDataFunc"},
+        {backend.fpScheduleGpuJob != nullptr, "fpScheduleGpuJob"},
+        {backend.fpExecuteGpuJobs != nullptr, "fpExecuteGpuJobs"},
+    };
+    for (const auto& callback : requiredCallbacks)
+    {
+        if (!callback.present)
+        {
+            char message[NSS_LOG_MESSAGE_CAPACITY];
+            std::snprintf(message, sizeof(message), "context creation requires %s", callback.name);
+            return logErrorWithCallback(FFX_ERROR_INCOMPLETE_INTERFACE, message, contextDescription->fpMessage);
+        }
+    }
 
-    // validate prarmeters
-    FFX_RETURN_ON_ERROR(contextDescription->renderSize.width, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->renderSize.height, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->upscaleSize.width, FFX_ERROR_INVALID_ALIGNMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->upscaleSize.height, FFX_ERROR_INVALID_ALIGNMENT);
+    if (contextDescription->qualityMode != FFX_NSS_SHADER_QUALITY_MODE_QUALITY && contextDescription->qualityMode != FFX_NSS_SHADER_QUALITY_MODE_BALANCED &&
+        contextDescription->qualityMode != FFX_NSS_SHADER_QUALITY_MODE_PERFORMANCE)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ENUM, "context creation validates qualityMode", contextDescription->fpMessage);
+    }
+    if (!contextDescription->renderSize.width)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ALIGNMENT, "context creation validates renderSize.width", contextDescription->fpMessage);
+    }
+    if (!contextDescription->renderSize.height)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ALIGNMENT, "context creation validates renderSize.height", contextDescription->fpMessage);
+    }
+    if (!contextDescription->upscaleSize.width)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ALIGNMENT, "context creation validates upscaleSize.width", contextDescription->fpMessage);
+    }
+    if (!contextDescription->upscaleSize.height)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ALIGNMENT, "context creation validates upscaleSize.height", contextDescription->fpMessage);
+    }
 
     // With single-step mirror mapping in preprocess shader, we require the aligned tensor extent
     // to stay within 2x render extent per axis. For align-up padding this is guaranteed when
     // render size is at least half the alignment.
     constexpr uint32_t kMinRenderSizeForMirror = (FFX_NSS_RESOURCE_ALIGNMENT + 1u) / 2u;
-    FFX_RETURN_ON_ERROR(contextDescription->renderSize.width >= kMinRenderSizeForMirror, FFX_ERROR_INVALID_ARGUMENT);
-    FFX_RETURN_ON_ERROR(contextDescription->renderSize.height >= kMinRenderSizeForMirror, FFX_ERROR_INVALID_ARGUMENT);
+    if (contextDescription->renderSize.width < kMinRenderSizeForMirror)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ARGUMENT, "context creation validates renderSize.width", contextDescription->fpMessage);
+    }
+    if (contextDescription->renderSize.height < kMinRenderSizeForMirror)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_ARGUMENT, "context creation validates renderSize.height", contextDescription->fpMessage);
+    }
 
     // if a scratch buffer is declared, then we must have a size
     if (contextDescription->backendInterface.scratchBuffer)
     {
-        FFX_RETURN_ON_ERROR(contextDescription->backendInterface.scratchBufferSize, FFX_ERROR_INCOMPLETE_INTERFACE);
+        if (!contextDescription->backendInterface.scratchBufferSize)
+        {
+            return logErrorWithCallback(FFX_ERROR_INCOMPLETE_INTERFACE, "context creation requires scratchBufferSize", contextDescription->fpMessage);
+        }
     }
 
     // ensure the context is large enough for the internal context.
     FFX_STATIC_ASSERT(sizeof(FfxNssContext) >= sizeof(FfxNssContext_Private));
 
     // create the context.
+    ffxLogSdkVersion(contextDescription->fpMessage);
+    logNssVersion(contextDescription->fpMessage);
     FfxNssContext_Private* contextPrivate = (FfxNssContext_Private*)(context);
     const FfxErrorCode     errorCode      = nssCreate(contextPrivate, contextDescription);
-
+    if (errorCode != FFX_OK)
+    {
+        if (!contextPrivate->unsupportedDevice)
+        {
+            logErrorWithCallback(errorCode, "NSS context creation failed", contextDescription->fpMessage);
+        }
+        if (contextPrivate->backendContextCreated)
+        {
+            const FfxErrorCode releaseError = nssRelease(contextPrivate);
+            if (releaseError != FFX_OK)
+            {
+                logErrorWithCallback(releaseError, "failed to release an incomplete NSS context", contextDescription->fpMessage);
+            }
+        }
+        contextPrivate->device = nullptr;
+        return errorCode;
+    }
+    nssLogContextCreate(contextPrivate);
     return errorCode;
+}
+
+FfxErrorCode ffxNssContextGetGpuMemoryUsage(FfxNssContext* context, FfxEffectMemoryUsage* vramUsage)
+{
+    if (!context)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "memory query requires a context");
+    }
+    FfxNssContext_Private* contextPrivate = reinterpret_cast<FfxNssContext_Private*>(context);
+    if (!vramUsage)
+    {
+        return logErrorWithCallback(FFX_ERROR_INVALID_POINTER, "memory query requires vramUsage", contextPrivate->contextDescription.fpMessage);
+    }
+
+    if (!contextPrivate->device)
+    {
+        return logErrorWithCallback(FFX_ERROR_NULL_DEVICE, "memory query requires a device", contextPrivate->contextDescription.fpMessage);
+    }
+    if (!contextPrivate->contextDescription.backendInterface.fpGetEffectGpuMemoryUsage)
+    {
+        return logErrorWithCallback(
+            FFX_ERROR_INCOMPLETE_INTERFACE, "memory query requires fpGetEffectGpuMemoryUsage", contextPrivate->contextDescription.fpMessage);
+    }
+
+    const FfxErrorCode errorCode = contextPrivate->contextDescription.backendInterface.fpGetEffectGpuMemoryUsage(
+        &contextPrivate->contextDescription.backendInterface, contextPrivate->effectContextId, vramUsage);
+    if (errorCode != FFX_OK)
+    {
+        return logErrorWithCallback(errorCode, "memory query", contextPrivate->contextDescription.fpMessage);
+    }
+
+    return FFX_OK;
 }
 
 FfxErrorCode ffxNssContextDestroy(FfxNssContext* context)
 {
-    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
+    if (!context)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "context destruction requires a context");
+    }
 
     // destroy the context.
     FfxNssContext_Private* contextPrivate = (FfxNssContext_Private*)(context);
-    const FfxErrorCode     errorCode      = nssRelease(contextPrivate);
-    return errorCode;
+    if (!contextPrivate->backendContextCreated)
+    {
+        return logErrorWithCallback(
+            FFX_ERROR_INVALID_ARGUMENT, "context destruction requires a live NSS context", contextPrivate->contextDescription.fpMessage);
+    }
+    const FfxErrorCode errorCode = nssRelease(contextPrivate);
+    FFX_RETURN_ON_ERROR(errorCode == FFX_OK, errorCode);
+    contextPrivate->device = nullptr;
+    printMessage(contextPrivate, FFX_MESSAGE_TYPE_INFO, "event=context_destroy");
+    return FFX_OK;
 }
 
 FfxErrorCode ffxNssContextDispatch(FfxNssContext* context, const FfxNssDispatchDescription* dispatchParams)
 {
-    FFX_RETURN_ON_ERROR(context, FFX_ERROR_INVALID_POINTER);
-    FFX_RETURN_ON_ERROR(dispatchParams, FFX_ERROR_INVALID_POINTER);
+    if (!context)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "dispatch requires a context");
+    }
 
-    FfxNssContext_Private* contextPrivate = (FfxNssContext_Private*)(context);
+    FfxNssContext_Private* contextPrivate = reinterpret_cast<FfxNssContext_Private*>(context);
     FFX_ASSERT(contextPrivate);
+    ++contextPrivate->diagnostics.dispatchId;
+    const bool verbose     = dispatchParams && (dispatchParams->flags & FFX_NSS_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING) != 0;
+    const auto reportError = [contextPrivate, verbose](FfxErrorCode errorCode, const char* reason, const char* stage = "validation") {
+        return logDispatchError(contextPrivate, errorCode, reason, verbose, stage);
+    };
+    if (!dispatchParams)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires parameters");
+    }
+    if (contextPrivate->requiresRecreation)
+    {
+        return reportError(FFX_ERROR_BACKEND_API_ERROR, "context requires recreation after a backend dispatch failure", "context_state");
+    }
+    if (verbose)
+    {
+        logDispatchBegin(contextPrivate, dispatchParams);
+    }
 
     // validate zero sizes.
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.width, FFX_ERROR_INVALID_ARGUMENT);
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.height, FFX_ERROR_INVALID_ARGUMENT);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.width, FFX_ERROR_INVALID_ARGUMENT);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.height, FFX_ERROR_INVALID_ARGUMENT);
+    if (!dispatchParams->renderSize.width)
+    {
+        return reportError(FFX_ERROR_INVALID_ARGUMENT, "dispatch validates renderSize.width");
+    }
+    if (!dispatchParams->renderSize.height)
+    {
+        return reportError(FFX_ERROR_INVALID_ARGUMENT, "dispatch validates renderSize.height");
+    }
+    if (!dispatchParams->upscaleSize.width)
+    {
+        return reportError(FFX_ERROR_INVALID_ARGUMENT, "dispatch validates upscaleSize.width");
+    }
+    if (!dispatchParams->upscaleSize.height)
+    {
+        return reportError(FFX_ERROR_INVALID_ARGUMENT, "dispatch validates upscaleSize.height");
+    }
 
     // validate that renderSize/upscaleSize match the size declared at context creation.
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.width == contextPrivate->contextDescription.renderSize.width, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->renderSize.height == contextPrivate->contextDescription.renderSize.height, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.width == contextPrivate->contextDescription.upscaleSize.width, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(dispatchParams->upscaleSize.height == contextPrivate->contextDescription.upscaleSize.height, FFX_ERROR_OUT_OF_RANGE);
-    FFX_RETURN_ON_ERROR(contextPrivate->device, FFX_ERROR_NULL_DEVICE);
+    if (dispatchParams->renderSize.width != contextPrivate->contextDescription.renderSize.width)
+    {
+        return reportError(FFX_ERROR_OUT_OF_RANGE, "dispatch validates renderSize.width");
+    }
+    if (dispatchParams->renderSize.height != contextPrivate->contextDescription.renderSize.height)
+    {
+        return reportError(FFX_ERROR_OUT_OF_RANGE, "dispatch validates renderSize.height");
+    }
+    if (dispatchParams->upscaleSize.width != contextPrivate->contextDescription.upscaleSize.width)
+    {
+        return reportError(FFX_ERROR_OUT_OF_RANGE, "dispatch validates upscaleSize.width");
+    }
+    if (dispatchParams->upscaleSize.height != contextPrivate->contextDescription.upscaleSize.height)
+    {
+        return reportError(FFX_ERROR_OUT_OF_RANGE, "dispatch validates upscaleSize.height");
+    }
+    if (!contextPrivate->device)
+    {
+        return reportError(FFX_ERROR_NULL_DEVICE, "dispatch requires a device");
+    }
+    if (!dispatchParams->commandList)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires a command list");
+    }
+    if (!dispatchParams->color.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires a color resource");
+    }
+    if (!dispatchParams->depth.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires a depth resource");
+    }
+    if (!dispatchParams->motionVectors.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires motion vectors");
+    }
+    if (!dispatchParams->output.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires an output resource");
+    }
+    if ((dispatchParams->flags & FFX_NSS_DISPATCH_FLAG_DRAW_DEBUG_VIEW) && !dispatchParams->debugViews.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires debug views");
+    }
+    if ((contextPrivate->contextDescription.flags & FFX_NSS_CONTEXT_FLAG_MANAGE_HISTORY) == 0 && !dispatchParams->outputTm1.resource)
+    {
+        return reportError(FFX_ERROR_INVALID_POINTER, "dispatch requires output history");
+    }
 
     // dispatch the NSS passes.
-    const FfxErrorCode errorCode = nssDispatch(contextPrivate, dispatchParams);
+    NssDispatchTrace        trace{"validation", {}, verbose};
+    NssCpuClock::time_point dispatchStart{};
+    if (verbose)
+    {
+        dispatchStart = NssCpuClock::now();
+    }
+    const FfxErrorCode errorCode = nssDispatch(contextPrivate, dispatchParams, trace);
+    if (errorCode != FFX_OK)
+    {
+        return reportError(errorCode, "NSS dispatch", trace.stage);
+    }
+    contextPrivate->diagnostics.lastError = {};
+    if (verbose)
+    {
+        const double dispatchUs = elapsedMicroseconds(dispatchStart, NssCpuClock::now());
+        char         message[NSS_LOG_MESSAGE_CAPACITY];
+        std::snprintf(message,
+                      sizeof(message),
+                      "event=cpu_profile cpu_pre_schedule_us=%.6g cpu_graph_schedule_us=%.6g cpu_post_schedule_us=%.6g cpu_dispatch_us=%.6g",
+                      trace.timings.preScheduleUs,
+                      trace.timings.graphScheduleUs,
+                      trace.timings.postScheduleUs,
+                      dispatchUs);
+        printMessage(contextPrivate, FFX_MESSAGE_TYPE_INFO, message);
+        printMessage(contextPrivate, FFX_MESSAGE_TYPE_INFO, "event=dispatch_end stage=record_commands result=recorded error_code=0 error_name=FFX_OK");
+    }
     return errorCode;
 }
 
@@ -1847,32 +2481,24 @@ static float halton(int32_t index, int32_t base)
 
 FfxErrorCode ffxNssGetJitterOffset(float* outX, float* outY, int32_t index, int32_t phaseCount)
 {
-    FFX_RETURN_ON_ERROR(outX, FFX_ERROR_INVALID_POINTER);
-    FFX_RETURN_ON_ERROR(outY, FFX_ERROR_INVALID_POINTER);
-    FFX_RETURN_ON_ERROR(phaseCount > 0, FFX_ERROR_INVALID_ARGUMENT);
+    if (!outX)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "jitter offset requires outX");
+    }
+    if (!outY)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_POINTER, "jitter offset requires outY");
+    }
+    if (phaseCount <= 0)
+    {
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "jitter offset requires a positive phase count");
+    }
 
     const float x = halton((index % phaseCount) + 1, 2) - 0.5f;
     const float y = halton((index % phaseCount) + 1, 3) - 0.5f;
 
     *outX = x;
     *outY = y;
-    return FFX_OK;
-}
-
-FFX_API FfxErrorCode ffxNssGetPipelineStageInfo(FfxNssContext* pContext, bool* pOutPreProcessUsesFragment, bool* pOutPostProcessUsesFragment)
-{
-    FFX_RETURN_ON_ERROR(pContext, FFX_ERROR_INVALID_POINTER);
-
-    const FfxNssContext_Private* context = reinterpret_cast<const FfxNssContext_Private*>(pContext);
-
-    if (pOutPreProcessUsesFragment != nullptr)
-    {
-        *pOutPreProcessUsesFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_PRE_PROCESS_FRAGMENT) != 0;
-    }
-    if (pOutPostProcessUsesFragment != nullptr)
-    {
-        *pOutPostProcessUsesFragment = (context->pipelineFlags & NSS_SHADER_PERMUTATION_POST_PROCESS_FRAGMENT) != 0;
-    }
     return FFX_OK;
 }
 

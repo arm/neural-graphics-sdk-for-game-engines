@@ -20,27 +20,27 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
-
-// @defgroup ffxFrameGeneration
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
 // Include the interface for the backend of the Frameinterpolation API.
 #include <FidelityFX/host/ffx_interface.h>
 
-/// FidelityFX Frameinterpolation major version.
+/// NFRU component major version.
 ///
 /// @ingroup ffxFrameGeneration
-#define FFX_FRAMEINTERPOLATION_VERSION_MAJOR (0)
+#define FFX_FRAMEINTERPOLATION_VERSION_MAJOR (2)
 
-/// FidelityFX Frameinterpolation minor version.
+/// NFRU component minor version.
 ///
 /// @ingroup ffxFrameGeneration
-#define FFX_FRAMEINTERPOLATION_VERSION_MINOR (1)
+#define FFX_FRAMEINTERPOLATION_VERSION_MINOR (0)
 
-/// FidelityFX Frameinterpolation patch version.
+/// NFRU component patch version.
 ///
 /// @ingroup ffxFrameGeneration
 #define FFX_FRAMEINTERPOLATION_VERSION_PATCH (0)
@@ -80,15 +80,19 @@ extern "C" {
 /// @ingroup ffxFrameGeneration
 typedef enum FfxFrameInterpolationPass
 {
-    FFX_FRAMEINTERPOLATION_PASS_INIT_WARP,             // 00_init_warp
-    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_OF_COLOUR,  // 01_downsample_of_colour
-    FFX_FRAMEINTERPOLATION_PASS_WARP_MV_TP1,           // 10_warp_flow
-    FFX_FRAMEINTERPOLATION_PASS_WARP_FLOW_TM1,         // 11_warp_flow_tm1
-    FFX_FRAMEINTERPOLATION_PASS_FILL_HOLES_TP1,        // 20_fill_holes
-    FFX_FRAMEINTERPOLATION_PASS_FILL_HOLES_TM1,        // 21_fill_holes_tm1
-    FFX_FRAMEINTERPOLATION_PASS_PREPROCESS,            // 30_preprocess
-    FFX_FRAMEINTERPOLATION_PASS_NFRU_INTERPOLATION,    // 40_data_graph_weight_gen
-    FFX_FRAMEINTERPOLATION_PASS_POSTPROCESS,           // 50_postprocess
+    FFX_FRAMEINTERPOLATION_PASS_INIT_WARP,                // 00_init_warp
+    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_OF_COLOUR,     // 01_downsample_of_colour
+    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_ALL_INPUT,     // 02_downsample_all_input
+    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_COLOUR,        // 03_downsample_colour
+    FFX_FRAMEINTERPOLATION_PASS_WARP_MV_TP1,              // 10_warp_flow
+    FFX_FRAMEINTERPOLATION_PASS_WARP_FLOW_TM1,            // 11_warp_flow_tm1
+    FFX_FRAMEINTERPOLATION_PASS_FILL_HOLES_TM1,           // 21_fill_holes_tm1
+    FFX_FRAMEINTERPOLATION_PASS_PREPROCESS,               // 30_preprocess
+    FFX_FRAMEINTERPOLATION_PASS_NFRU_INTERPOLATION,       // 40_data_graph_weight_gen
+    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_INPAINT_SEED,  // 31_downsample_inpaint (seed -> level 0)
+    FFX_FRAMEINTERPOLATION_PASS_DOWNSAMPLE_INPAINT_MIP,   // 31_downsample_inpaint (level i-1 -> i)
+    FFX_FRAMEINTERPOLATION_PASS_INPAINT,                  // 50_inpaint (inpaint resolver)
+    FFX_FRAMEINTERPOLATION_PASS_POSTPROCESS,              // 50_postprocess
     FFX_FRAMEINTERPOLATION_PASS_DEBUG_VIEW,
     FFX_FRAMEINTERPOLATION_PASS_COUNT  ///< The number of passes performed by FrameInterpolation.
 } FfxFrameInterpolationPass;
@@ -109,17 +113,21 @@ typedef enum FfxFrameInterpolationInitializationFlagBits
     FFX_FG_CONTEXT_FLAG_ENABLE_HIGH_DYNAMIC_RANGE                 = (1 << 3),  ///< A bit indicating that HDR values are present in the imaging pipeline.
     FFX_FG_CONTEXT_FLAG_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS  = (1 << 4),  ///< A bit indicating if the motion vectors are rendered at display resolution.
     FFX_FG_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION = (1 << 5),
-    FFX_FG_CONTEXT_FLAG_WARP_FRAGMENT        = (1 << 6),   ///< A bit indicating that warp stages (MV TP1 + flow TM1) should run as fragment jobs
-    FFX_FG_CONTEXT_FLAG_FILL_HOLES_FRAGMENT  = (1 << 7),   ///< A bit indicating that fill holes stages (TP1 + TM1) should run as fragment jobs
-    FFX_FG_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT = (1 << 8),   ///< A bit indicating that the preprocess stage should run as a fragment job when supported
-    FFX_FG_CONTEXT_FLAG_POSTPROCESS_FRAGMENT = (1 << 9),   ///< A bit indicating that the postprocess stage should run as a fragment job
-    FFX_FG_CONTEXT_FLAG_DEBUG_VIEW_FRAGMENT  = (1 << 11),  ///< A bit indicating that the debug view stage should run as a fragment job
-    FFX_FG_CONTEXT_FLAG_ALL_STAGES_FRAGMENT  = FFX_FG_CONTEXT_FLAG_WARP_FRAGMENT | FFX_FG_CONTEXT_FLAG_FILL_HOLES_FRAGMENT |
-                                              FFX_FG_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT | FFX_FG_CONTEXT_FLAG_POSTPROCESS_FRAGMENT |
-                                              FFX_FG_CONTEXT_FLAG_DEBUG_VIEW_FRAGMENT,  ///< Convenience: set all stages to fragment
-    FFX_FG_CONTEXT_FLAG_ALL_STAGES_COMPUTE    = 0,                                      ///< Convenience: set all stages to compute (no fragment flags set)
-    FFX_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_DEPTH = (1 << 15),  ///< A bit indicating that the SDK manages the previous depth internally.
-    FFX_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_COLOR = (1 << 16),  ///< A bit indicating that the SDK manages the previous color internally.
+    FFX_FG_CONTEXT_FLAG_WARP_COMPUTE =
+        (1 << 6),  ///< A bit indicating that warp stages (MV TP1 + flow TM1) should run as compute jobs. When unset, fragment jobs are used.
+    FFX_FG_CONTEXT_FLAG_FILL_HOLES_COMPUTE =
+        (1 << 7),  ///< A bit indicating that fill holes stages (TP1 + TM1) should run as compute jobs. When unset, fragment jobs are used.
+    FFX_FG_CONTEXT_FLAG_PRE_PROCESS_COMPUTE =
+        (1 << 8),  ///< A bit indicating that the preprocess stage should run as a compute job. When unset, the fragment job is used.
+    FFX_FG_CONTEXT_FLAG_POSTPROCESS_COMPUTE =
+        (1 << 9),  ///< A bit indicating that the postprocess stage should run as a compute job. When unset, the fragment job is used.
+    FFX_FG_CONTEXT_FLAG_DEBUG_VIEW_COMPUTE =
+        (1 << 11),  ///< A bit indicating that the debug view stage should run as a compute job. When unset, the fragment job is used.
+    FFX_FG_CONTEXT_FLAG_ALL_STAGES_COMPUTE = FFX_FG_CONTEXT_FLAG_WARP_COMPUTE | FFX_FG_CONTEXT_FLAG_FILL_HOLES_COMPUTE |
+                                             FFX_FG_CONTEXT_FLAG_PRE_PROCESS_COMPUTE | FFX_FG_CONTEXT_FLAG_POSTPROCESS_COMPUTE |
+                                             FFX_FG_CONTEXT_FLAG_DEBUG_VIEW_COMPUTE,  ///< Convenience: set all selectable stages to compute.
+    FFX_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_DEPTH = (1 << 15),                            ///< A bit indicating that the SDK manages the previous depth internally.
+    FFX_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_COLOR = (1 << 16),                            ///< A bit indicating that the SDK manages the previous color internally.
 } FfxFrameInterpolationInitializationFlagBits;
 
 /// Pass a string message
@@ -140,14 +148,16 @@ typedef void (*FfxFiMessage)(FfxMsgType type, const char* message);
 typedef struct FfxFrameInterpolationContextDescription
 {
     uint32_t               flags;          ///< A collection of <c><i>FfxFrameInterpolationInitializationFlagBits</i></c>.
-    FfxDimensions2D        maxRenderSize;  ///< The maximum size that rendering will be performed at.
-    FfxDimensions2D        displaySize;    ///< The size of the presentation resolution
+    FfxDimensions2D        maxRenderSize;  ///< Maximum render size; dimensions must fit the signed 32-bit shader range.
+    FfxDimensions2D        displaySize;    ///< Presentation resolution; dimensions must fit the signed 32-bit shader range.
     FfxSurfaceFormat       backBufferFormat;
     FfxInterface           backendInterface;       ///< A set of pointers to the backend implementation for FidelityFX SDK
     FfxFloat32x4x4         initialViewProjection;  ///< The initial view-projection matrix used to initialize internal state.
     FfxDimensions2D        opticalFlowSize;        ///< The optical flow size.
     FfxOpticalFlowGridSize opticalFlowGridSize;    ///< Optical flow block/grid size (1, 2, 4 or 8). Used to convert flow vectors to UV space on the GPU.
     FfxFiMessage           fpMessage;              ///< A pointer to a function that can receive messages from the runtime.
+    FfxDimensions2D
+        mvDepthSize;  ///< Shared input depth/motion-vector resolution. {0, 0} defaults to maxRenderSize. Dimensions must fit the signed 32-bit shader range and have the same aspect ratio as maxRenderSize.
 } FfxFrameInterpolationContextDescription;
 
 /// A structure encapsulating the FidelityFX Super Resolution 2 context.
@@ -217,13 +227,13 @@ FFX_API FfxErrorCode ffxFrameInterpolationContextGetGpuMemoryUsage(FfxFrameInter
 
 typedef struct FfxFrameInterpolationPrepareDescription
 {
-    FfxCommandList   commandList;        ///< The <c><i>FfxCommandList</i></c> to record frame interpolation commands into.
-    FfxFloatCoords2D jitterOffset;       ///< The subpixel jitter offset applied to the camera.
-    FfxFloatCoords2D motionVectorScale;  ///< The scale factor to apply to motion vectors.
-    float
-        mvSimilarityThreshold;  ///< Motion-vector similarity threshold (epsilon) used by dynamic-mask classification. <= 0 falls back to the legacy default (0.3).
-    float
-        mvSimilarityNoiseThreshold;  ///< Motion-vector noise threshold (tau) used by dynamic-mask classification. <= 0 falls back to the legacy default (1.0).
+    FfxCommandList   commandList;   ///< The <c><i>FfxCommandList</i></c> to record frame interpolation commands into.
+    FfxFloatCoords2D jitterOffset;  ///< Sample-position offset in maxRenderSize pixels, matching the upscaler for this frameID; not raster displacement.
+    FfxFloatCoords2D
+          motionVectorScale;  ///< Converts stored motion to mvDepthSize pixel offsets (displaySize pixels when the display-resolution motion-vector flag is set).
+    float mvSimilarityThreshold;  ///< Motion-vector similarity threshold (epsilon) used by dynamic-mask classification. <= 0 falls back to the default (0.25).
+    float mvSimilarityNoiseThreshold;     ///< Motion-vector noise threshold (tau) used by dynamic-mask classification. <= 0 falls back to the default (0.125).
+    float mvSimilarityRelativeThreshold;  ///< Relative motion-vector threshold; <= 0 uses 0.002, while NaN and infinities are rejected.
 
     float frameTimeDelta;
     float cameraNear;
@@ -257,10 +267,9 @@ typedef struct FfxFrameInterpolationDispatchDescription
     FfxResource    currentBackBuffer;  ///< The current presentation color.
     FfxResource    output;             ///< The output resource where to store the interpolated result.
 
-    FfxResource      opticalFlowVector;                ///< The optical flow motion vectors (see example computation in the FfxOpticalFlow effect)
-    FfxResource      opticalFlowSceneChangeDetection;  ///< The optical flow scene change detection data
-    FfxDimensions2D  opticalFlowBufferSize;            ///< The optical flow motion vector resource dimensions
-    FfxFloatCoords2D opticalFlowScale;                 ///< The optical flow motion vector scale factor, used to scale resoure values into [0.0,1.0] range.
+    FfxResource      opticalFlowVector;      ///< The optical flow motion vectors (see example computation in the FfxOpticalFlow effect)
+    FfxDimensions2D  opticalFlowBufferSize;  ///< The optical flow motion vector resource dimensions
+    FfxFloatCoords2D opticalFlowScale;       ///< The optical flow motion vector scale factor, used to scale resoure values into [0.0,1.0] range.
 
     float cameraNear;               ///< The distance to the near plane of the camera.
     float cameraFar;                ///< The distance to the far plane of the camera. This is used only used in case of non infinite depth.
@@ -278,8 +287,8 @@ typedef struct FfxFrameInterpolationDispatchDescription
 FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext* context, const FfxFrameInterpolationDispatchDescription* params);
 
 /// Dispatch the OF colour downsample pass (pre-OF step for >1080p inputs).
-/// Must be called BEFORE optical flow dispatch when requiresColourDownsample is true.
-/// The downsampled colour is stored internally; retrieve with ffxFrameInterpolationGetDownsampledColourResource().
+/// Must be called before optical flow dispatch when the resolution plan selects OF-colour downsampling.
+/// The downsampled colour is stored internally; retrieve it with ffxFrameInterpolationGetDownsampledOfColourP1().
 /// No-op when the context was created with displaySize.height <= 1080.
 ///
 /// @param [in] context         A pointer to an initialised FfxFrameInterpolationContext.
@@ -288,9 +297,9 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatch(FfxFrameInterpolationContext*
 ///
 /// @retval FFX_OK              The operation completed successfully.
 /// @ingroup ffxFrameGeneration
-FFX_API FfxErrorCode ffxFrameInterpolationDispatchDownsampleColour(FfxFrameInterpolationContext* context,
-                                                                   FfxCommandList                commandList,
-                                                                   FfxResource                   currentColour);
+FFX_API FfxErrorCode ffxFrameInterpolationDispatchDownsampleOfColour(FfxFrameInterpolationContext* context,
+                                                                     FfxCommandList                commandList,
+                                                                     FfxResource                   currentColour);
 
 /// Get whether the context requires colour downsampling before OF (displaySize.height > 1080).
 ///
@@ -299,31 +308,31 @@ FFX_API FfxErrorCode ffxFrameInterpolationDispatchDownsampleColour(FfxFrameInter
 ///
 /// @retval FFX_OK              The operation completed successfully.
 /// @ingroup ffxFrameGeneration
-FFX_API FfxErrorCode ffxFrameInterpolationGetRequiresColourDownsample(FfxFrameInterpolationContext* context, bool* pRequired);
+FFX_API FfxErrorCode ffxFrameInterpolationGetRequiresOfColourDownsample(FfxFrameInterpolationContext* context, bool* pRequired);
 
 /// Get the downsampled P1 (current frame) internal colour resource.
-/// Only valid after ffxFrameInterpolationDispatchDownsampleColour() has been called.
-/// Returns a null resource when requiresColourDownsample is false.
+/// Only valid after ffxFrameInterpolationDispatchDownsampleOfColour() has been called.
+/// Returns a null resource when the resolution plan does not select OF-colour downsampling.
 ///
 /// @param [in]  context        A pointer to an initialised FfxFrameInterpolationContext.
 /// @param [out] pResource      Receives the FfxResource handle for the downsampled colour.
 ///
 /// @retval FFX_OK              The operation completed successfully.
 /// @ingroup ffxFrameGeneration
-FFX_API FfxErrorCode ffxFrameInterpolationGetDownsampledColourP1(FfxFrameInterpolationContext* context, FfxResource* pResource);
+FFX_API FfxErrorCode ffxFrameInterpolationGetDownsampledOfColourP1(FfxFrameInterpolationContext* context, FfxResource* pResource);
 
 /// Get the downsampled M1 (previous frame) internal colour resource.
 /// After the ping-pong swap at the end of each dispatch, M1 holds the
 /// previous frame's downsampled colour — suitable for use as the OF's
 /// colour reference (colorTm1) at >1080p.
-/// Returns a null resource when requiresColourDownsample is false.
+/// Returns a null resource when the resolution plan does not select OF-colour downsampling.
 ///
 /// @param [in]  context        A pointer to an initialised FfxFrameInterpolationContext.
 /// @param [out] pResource      Receives the FfxResource handle for the previous frame's downsampled colour.
 ///
 /// @retval FFX_OK              The operation completed successfully.
 /// @ingroup ffxFrameGeneration
-FFX_API FfxErrorCode ffxFrameInterpolationGetDownsampledColourM1(FfxFrameInterpolationContext* context, FfxResource* pResource);
+FFX_API FfxErrorCode ffxFrameInterpolationGetDownsampledOfColourM1(FfxFrameInterpolationContext* context, FfxResource* pResource);
 
 /// Destroy the FidelityFX Super Resolution context.
 ///
@@ -336,33 +345,6 @@ FFX_API FfxErrorCode ffxFrameInterpolationGetDownsampledColourM1(FfxFrameInterpo
 ///
 /// @ingroup ffxFrameGeneration
 FFX_API FfxErrorCode ffxFrameInterpolationContextDestroy(FfxFrameInterpolationContext* context);
-
-/// Query whether each stage group is executing as a fragment job or compute
-/// job for the given frame interpolation context.
-///
-/// The answer is determined at context-creation time based on the requested
-/// flags and the device capabilities detected at that point.  A caller may
-/// pass <c>NULL</c> for any output pointer if that value is not needed.
-///
-/// @param [in]  pContext                           A pointer to an initialised <c><i>FfxFrameInterpolationContext</i></c>.
-/// @param [out] pOutWarpUsesFragment               Receives <c>true</c> if warp stages run as fragment jobs. May be <c>NULL</c>.
-/// @param [out] pOutFillHolesUsesFragment          Receives <c>true</c> if fill holes stages run as fragment jobs. May be <c>NULL</c>.
-/// @param [out] pOutPreProcessUsesFragment         Receives <c>true</c> if pre-process runs as a fragment job. May be <c>NULL</c>.
-/// @param [out] pOutPostprocessUsesFragment        Receives <c>true</c> if postprocess runs as a fragment job. May be <c>NULL</c>.
-/// @param [out] pOutDebugViewUsesFragment          Receives <c>true</c> if debug view runs as a fragment job. May be <c>NULL</c>.
-///
-/// @retval
-/// FFX_OK                              The operation completed successfully.
-/// @retval
-/// FFX_ERROR_INVALID_POINTER           <c><i>pContext</i></c> was <c>NULL</c>.
-///
-/// @ingroup ffxFrameGeneration
-FFX_API FfxErrorCode ffxFrameInterpolationGetPipelineStageInfo(FfxFrameInterpolationContext* pContext,
-                                                               bool*                         pOutWarpUsesFragment,
-                                                               bool*                         pOutFillHolesUsesFragment,
-                                                               bool*                         pOutPreProcessUsesFragment,
-                                                               bool*                         pOutPostprocessUsesFragment,
-                                                               bool*                         pOutDebugViewUsesFragment);
 
 /// Queries the effect version number.
 ///

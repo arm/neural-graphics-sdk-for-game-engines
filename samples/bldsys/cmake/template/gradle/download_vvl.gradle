@@ -20,6 +20,11 @@ apply plugin: 'com.android.application'
  */
 
 /*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
  * Download validation layer binary release zip file from Khronos github repo
  *    https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases
  *

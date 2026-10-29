@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 /// @defgroup VKBackend Vulkan Backend
 /// FidelityFX SDK native backend implementation for Vulkan.
@@ -80,6 +82,7 @@ typedef struct VkFunctionTable
     PFN_vkCmdCopyImage                                                      vkCmdCopyImage                                                      = 0;
     PFN_vkCmdCopyBufferToImage                                              vkCmdCopyBufferToImage                                              = 0;
     PFN_vkCmdClearColorImage                                                vkCmdClearColorImage                                                = 0;
+    PFN_vkCmdClearDepthStencilImage                                         vkCmdClearDepthStencilImage                                         = 0;
     PFN_vkCmdFillBuffer                                                     vkCmdFillBuffer                                                     = 0;
     PFN_vkCmdBeginRenderPass                                                vkCmdBeginRenderPass                                                = 0;
     PFN_vkCmdEndRenderPass                                                  vkCmdEndRenderPass                                                  = 0;
@@ -129,6 +132,7 @@ typedef struct VkFunctionTable
     PFN_vkDestroyDataGraphPipelineSessionARM                  vkDestroyDataGraphPipelineSessionARM                  = 0;
     PFN_vkDestroyTensorARM                                    vkDestroyTensorARM                                    = 0;
     PFN_vkDestroyTensorViewARM                                vkDestroyTensorViewARM                                = 0;
+    PFN_vkGetPhysicalDeviceFormatProperties                   vkGetPhysicalDeviceFormatProperties                   = 0;
 } VkFunctionTable;
 
 /// @brief Initialize the Vulkan wrapper with the provided device context.

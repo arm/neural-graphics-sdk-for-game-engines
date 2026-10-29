@@ -25,6 +25,8 @@ add_sample(
     AUTHOR "Arm"
     NAME "NFRU"
     DESCRIPTION "NFRU Frame Generation Sample - realtime scene rendering or EXR dataset replay"
+    LIBS
+        sample_common
     FILES
         dataset_loader.h
         dataset_loader.cpp

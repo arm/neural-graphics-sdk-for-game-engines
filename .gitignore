@@ -1,12 +1,25 @@
 .github/
 .vscode/
 .idea/
+.cache/
 *.sln
 *.code-workspace
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
 
 /bin
 /build
 /build_*
+/deps/
 sdk/tools/ffx_shader_compiler/bin/
 sdk/tools/ffx_shader_compiler/build/
 sdk/tools/ffx_model_parser/bin/
@@ -15,6 +28,13 @@ sdk/tools/ffx_model_parser/build/
 /gen_docs
 
 *.log
+
+# Downloaded dataset payloads
+/datasets
+/.dataset-download-*/
+
+# Local agent reports and generated diagnostics
+/agents_output/
 
 # Samples specific ignores
 samples/.github/

@@ -25,6 +25,16 @@
 #include <FidelityFX/host/ffx_interface.h>
 #include <ffx_api/ffx_api.hpp>
 
+#ifdef FFX_UNIT_TEST
+#define FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_TEST 0x00000006u
+
+struct ffxCreateBackendTestDesc
+{
+    ffxCreateContextDescHeader header;
+    FfxInterface               backendInterface;
+};
+#endif
+
 ffxReturnCode_t CreateBackend(const ffxCreateContextDescHeader* desc, bool& backendFound, FfxInterface* iface, size_t contexts, Allocator& alloc);
 
 inline ffxReturnCode_t MustCreateBackend(const ffxCreateContextDescHeader* desc, FfxInterface* iface, size_t contexts, Allocator& alloc)

@@ -1,0 +1,148 @@
+{
+  "name": "nfru-replay-legacy",
+  "description": "Legacy NFRU replay layout with top-level depth planes and motion_t-2.",
+  "supported_use_cases": [
+    "debug",
+    "replay"
+  ],
+  "lane_defaults": {
+    "pixel_types": [
+      "HALF",
+      "FLOAT"
+    ]
+  },
+  "metadata": {
+    "required_top_level": [
+      "NearPlane",
+      "FarPlane",
+      "TargetResolution",
+      "UpscalingRatiosIndices",
+      "Samples",
+      "Frames"
+    ],
+    "required_frame": [
+      "Frame",
+      "FovX",
+      "FovY",
+      "ViewProjection",
+      "Exposure"
+    ]
+  },
+  "jitter": {
+    "required_use_cases": [
+      "debug",
+      "replay"
+    ],
+    "keys": [
+      "NormalizedPerRatioJitter",
+      "QuantisedPerRatioJitter"
+    ],
+    "dimension_lane": "depth",
+    "cadence": "even",
+    "range_pixels": [
+      -0.5,
+      0.5
+    ],
+    "max_abs_mean_pixels": 0.15,
+    "min_span_pixels": 0.4,
+    "min_quadrants": 4,
+    "min_phase_length": 4,
+    "max_duplicate_fraction": 0.25,
+    "min_nearest_spacing_pixels": 0.05,
+    "max_abs_correlation": 0.95
+  },
+  "exposure": {
+    "required_use_cases": [
+      "debug",
+      "replay"
+    ],
+    "field": "Exposure",
+    "cadence": "even",
+    "minimum_inclusive": 0.0,
+    "warning_maximum": 1024.0
+  },
+  "lanes": {
+    "color": {
+      "paths": [
+        "ground_truth/{sequence}"
+      ],
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "accepted_cadences": [
+        "all",
+        "even"
+      ],
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "dimension_group": "target"
+    },
+    "depth": {
+      "paths": [
+        "{scale}/depth/{sequence}"
+      ],
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "accepted_cadences": [
+        "all",
+        "even"
+      ],
+      "channels": [
+        "R"
+      ],
+      "channel_aliases": [
+        "Y"
+      ],
+      "dimension_group": "render",
+      "value_range": [
+        0.0,
+        1.0
+      ]
+    },
+    "motion": {
+      "paths": [
+        "{scale}/motion_t-2/{sequence}"
+      ],
+      "content": "motion",
+      "required_use_cases": [
+        "debug",
+        "replay"
+      ],
+      "accepted_cadences": [
+        "all",
+        "even"
+      ],
+      "channels": [
+        "R",
+        "G"
+      ],
+      "dimension_group": "render",
+      "value_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    "prediction": {
+      "paths": [
+        "result/nfru_{scale}/{sequence}"
+      ],
+      "required_use_cases": [],
+      "recommended_use_cases": [
+        "debug"
+      ],
+      "cadence": "midpoints_between_even",
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "dimension_group": "target"
+    }
+  }
+}

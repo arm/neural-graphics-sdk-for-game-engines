@@ -15,6 +15,11 @@
  * limitations under the License.
  */
 
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
+
 #pragma once
 
 #include "common/hpp_vk_common.h"
@@ -719,13 +724,20 @@ inline void Device<bindingType>::init(std::unordered_map<const char *, bool> con
 		}
 	}
 
+	// Enable fragmentStoresAndAtomics feature for fragment shader writes
+	vk::PhysicalDeviceFeatures2 features2{};
+	features2.sType                             = vk::StructureType::ePhysicalDeviceFeatures2;
+	features2.pNext                             = gpu.get_extension_feature_chain();
+	features2.features                          = gpu.get_requested_features();
+	features2.features.fragmentStoresAndAtomics = VK_TRUE;
+
 	// Latest requested feature will have the pNext's all set up for device creation.
-	vk::DeviceCreateInfo create_info{.pNext                   = gpu.get_extension_feature_chain(),
+	vk::DeviceCreateInfo create_info{.pNext                   = &features2,
 	                                 .queueCreateInfoCount    = static_cast<uint32_t>(queue_create_infos.size()),
 	                                 .pQueueCreateInfos       = queue_create_infos.data(),
 	                                 .enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size()),
 	                                 .ppEnabledExtensionNames = enabled_extensions.data(),
-	                                 .pEnabledFeatures        = &gpu.get_requested_features()};
+	                                 .pEnabledFeatures        = nullptr};
 
 	this->set_handle(gpu.get_handle().createDevice(create_info));
 

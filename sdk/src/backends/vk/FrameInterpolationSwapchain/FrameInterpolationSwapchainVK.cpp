@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "FrameInterpolationSwapchainVK.h"
 #include "FrameInterpolationSwapchainVK_DebugPacing.h"
@@ -30,15 +32,20 @@
 #include <FidelityFX/host/ffx_assert.h>
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
 #include <FidelityFX/host/backends/vk/vk_wrapper.h>
+
+#include "ffx_logging.h"
+
 #define ENABLE_EXR_EXPORT
 #ifdef ENABLE_EXR_EXPORT
-#ifndef DISABLE_SDK_TINYEXR_IMPLEMENTATION
-#define TINYEXR_IMPLEMENTATION
-#endif
 #include <tinyexr/tinyexr.h>
 #endif
 #include <vector>
 #include <mutex>
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "FISwapchain";
+}
 
 struct AsyncDumpOperation
 {
@@ -700,6 +707,8 @@ FFX_API FfxErrorCode ffxSetFrameGenerationConfigToSwapchainVK(FfxFrameGeneration
 {
     FfxErrorCode result = FFX_ERROR_INVALID_ARGUMENT;
 
+    FFX_RETURN_ON_ERROR(config != nullptr, FFX_ERROR_INVALID_POINTER);
+    FFX_RETURN_ON_ERROR(config->swapChain != nullptr, FFX_ERROR_INVALID_ARGUMENT);
     if (config->swapChain)
     {
         FrameInterpolationSwapChainVK* frameinterpolationSwapchain = reinterpret_cast<FrameInterpolationSwapChainVK*>(config->swapChain);
@@ -710,30 +719,33 @@ FFX_API FfxErrorCode ffxSetFrameGenerationConfigToSwapchainVK(FfxFrameGeneration
         }
     }
 
-    return result;
+    return FFX_OK;
 }
 
 FfxErrorCode ffxConfigureFrameInterpolationSwapchainVK(FfxSwapchain gameSwapChain, FfxFrameInterpolationSwapchainConfigureKey key, void* valuePtr)
 {
-    if (gameSwapChain)
+    if (nullptr == gameSwapChain)
     {
-        FrameInterpolationSwapChainVK* pSwapChainVK = reinterpret_cast<FrameInterpolationSwapChainVK*>(gameSwapChain);
-        switch (key)
-        {
-        case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_WAITCALLBACK:
-            pSwapChainVK->setWaitCallback(reinterpret_cast<FfxWaitCallbackFunc>(valuePtr));
-            break;
-        case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_FRAMEPACINGTUNING:
-            if (valuePtr != nullptr)
-            {
-                pSwapChainVK->setFramePacingTuning(static_cast<FfxSwapchainFramePacingTuning*>(valuePtr));
-            }
-            break;
-            return FFX_OK;
-        }
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the game swapchain is nullptr!");
     }
 
-    return FFX_ERROR_INVALID_ARGUMENT;
+    FrameInterpolationSwapChainVK* pSwapChainVK = reinterpret_cast<FrameInterpolationSwapChainVK*>(gameSwapChain);
+    switch (key)
+    {
+    case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_WAITCALLBACK:
+        pSwapChainVK->setWaitCallback(reinterpret_cast<FfxWaitCallbackFunc>(valuePtr));
+        return FFX_OK;
+    case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_FRAMEPACINGTUNING:
+        if (valuePtr != nullptr)
+        {
+            pSwapChainVK->setFramePacingTuning(static_cast<FfxSwapchainFramePacingTuning*>(valuePtr));
+        }
+        return FFX_OK;
+    default:
+        break;
+    }
+
+    return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the swapchain configuration key is not recognized");
 }
 
 FfxResource ffxGetFrameinterpolationTextureVK(FfxSwapchain gameSwapChain)
@@ -763,7 +775,7 @@ FfxErrorCode ffxReplaceSwapchainForFrameinterpolationVK(FfxCommandQueue         
     FFX_ASSERT(swapchainCreateInfo != VK_NULL_HANDLE);
 
     if (frameInterpolationInfo == nullptr)
-        return FFX_ERROR_INVALID_ARGUMENT;
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "frame interpolation configuration is null");
 
     FFX_ASSERT(frameInterpolationInfo->device != VK_NULL_HANDLE);
     FFX_ASSERT(frameInterpolationInfo->physicalDevice != VK_NULL_HANDLE);
@@ -775,7 +787,7 @@ FfxErrorCode ffxReplaceSwapchainForFrameinterpolationVK(FfxCommandQueue         
 
     // createInfo.oldSwapchain should be the same as gameSwapchain if not VK_NULL_HANDLE
     if (createInfo.oldSwapchain != VK_NULL_HANDLE && createInfo.oldSwapchain != gameSwapchain)
-        return FFX_ERROR_INVALID_ARGUMENT;
+        return ffxLogError(FFX_ERROR_INVALID_ARGUMENT, "the old swapchain does not match the swapchain being replaced");
 
     // use the old swapchain to help with resource reuse
     createInfo.oldSwapchain = gameSwapchain;
@@ -795,7 +807,8 @@ FfxErrorCode ffxReplaceSwapchainForFrameinterpolationVK(FfxCommandQueue         
 
     gameSwapChain = reinterpret_cast<VkSwapchainKHR>(pSwapChainVK);
 
-    return status;
+    FFX_RETURN_ON_ERROR(status == FFX_OK, status);
+    return FFX_OK;
 }
 
 FfxErrorCode ffxWaitForPresents(FfxSwapchain gameSwapChain)

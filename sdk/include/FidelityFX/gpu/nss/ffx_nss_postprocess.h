@@ -240,9 +240,10 @@ int32_t KpnCoordFromInputCoord(int32_t input_coord, int32_t input_dim, int32_t k
 
 int16_t4 KpnCoordFromInputCoord4(int16_t4 input_coord, int32_t input_dim, int32_t kpn_dim)
 {
-    int32_t  safe_dim = max(input_dim, int32_t(1));
-    int32_t4 scaled   = (int32_t4(input_coord) * int32_t4(kpn_dim)) / int32_t4(safe_dim);
-    return int16_t4(min(scaled, int32_t4(kpn_dim - int32_t(1))));
+    int   safe_dim = max(input_dim, 1);
+    float scale    = float(kpn_dim) / float(safe_dim);
+    ivec4 scaled   = ivec4(vec4(input_coord) * scale);
+    return i16vec4(min(scaled, ivec4(kpn_dim - 1)));
 }
 
 // KPN coordinate mapping using precomputed scale (kpnDims / paddedDims).
@@ -396,7 +397,7 @@ half2 LoadMotionPost(int32_t2 output_coord)
     int32_t2 dilation_offset = DecodeNearestOffset(input_coord);
     int32_t2 dilated_coord   = clamp(input_coord + dilation_offset, int32_t2(0), InputDims() - int32_t2(1));
 
-    half2 v = half2(texelFetch(_MotionVectorTex, dilated_coord, 0).xy * MotionVectorScale()) * half2(Scale());
+    half2 v = half2(CancelMotionVectorJitter(texelFetch(_MotionVectorTex, dilated_coord, 0).xy * MotionVectorScale())) * half2(Scale());
     v *= half(dot(float2(v), float2(v)) > kMotionThresholdSq);
     return v;
 }
@@ -406,7 +407,11 @@ half2 LoadMotionPost(int32_t2 output_coord)
 // ---------------------------------------------------------------------------
 half3 LoadColourTap(int32_t2 lr_tap)
 {
+#if NSS_LDR_MODE
+    return clamp(half3(texelFetch(_ColourTex, lr_tap, 0).rgb), half3(0.HF), half3(1.HF));
+#else
     return half3(texelFetch(_ColourTex, lr_tap, 0).rgb);
+#endif
 }
 
 half4 LoadColourTap4(int32_t2 lr_tap)
@@ -463,7 +468,7 @@ half4 LoadWarpedHistoryCatmullPost(float2 uv)
     half4 cmax4 = half4(max(float4(up), max(float4(left), max(float4(center), max(float4(right), float4(down))))));
 
     half3 color = accum.rgb * rcp(accum.w);
-    color       = any(lessThan(color, half3(0.HF))) ? clamp(color, cmin4.rgb, cmax4.rgb) : color;
+    color       = any(lessThan(color, cmin4.rgb)) ? clamp(color, cmin4.rgb, cmax4.rgb) : color;
     return half4(color, 1.HF);
 }
 #endif
@@ -777,6 +782,7 @@ void WarpHistory(int32_t2 output_px, float2 uv, out half4 warped_colour, out hal
     half2  motion    = LoadMotionPost(output_px);
     float2 reproj_uv = uv + (float2(motion) * InvOutputDims());
     onscreen         = half(all(greaterThanEqual(reproj_uv, float2(0.0))) && all(lessThanEqual(reproj_uv, float2(1.0))));
+    reproj_uv        = clamp(reproj_uv, float2(0.0), float2(1.0));
 #ifdef ENABLE_HISTORY_CATMULL
     warped_colour = LoadWarpedHistoryCatmullPost(reproj_uv);
 #else
@@ -789,12 +795,14 @@ void WarpHistory(int32_t2 output_px, float2 uv, out half4 warped_colour, out hal
 // ---------------------------------------------------------------------------
 void ClampHistoryToStats(half4 m1, half4 m2, half4 warped_history, half theta, half gamma, half reset, half onscreen, out half4 rectified)
 {
-    half4 sigma_4         = half4(sqrt(max(float4(abs(m2 - m1 * m1)), float4(float(EPS))))) * half4(gamma);
-    sigma_4.a             = 0.HF;
-    half4 aabb_min        = m1 - sigma_4;
-    half4 aabb_max        = m1 + sigma_4;
-    half4 history_clamped = mix(m1, clamp(warped_history, aabb_min, aabb_max), half4(reset));
-    rectified             = mix(history_clamped, warped_history, half4(theta * onscreen * reset));
+    half4 sigma_4          = half4(sqrt(max(float4(abs(m2 - m1 * m1)), float4(float(EPS))))) * half4(gamma);
+    sigma_4.a              = 0.HF;
+    half4  aabb_min        = m1 - sigma_4;
+    half4  aabb_max        = m1 + sigma_4;
+    float4 m1_f            = float4(m1);
+    float4 history_f       = float4(warped_history);
+    float4 history_clamped = mix(m1_f, float4(clamp(warped_history, aabb_min, aabb_max)), float4(float(reset)));
+    rectified              = half4(mix(history_clamped, history_f, float4(float(theta * onscreen * reset))));
 }
 
 // ---------------------------------------------------------------------------
@@ -802,8 +810,12 @@ void ClampHistoryToStats(half4 m1, half4 m2, half4 warped_history, half theta, h
 // ---------------------------------------------------------------------------
 half3 ClampToInvertibleRange(half3 accumulated, half inv_exposure)
 {
+#if NSS_LDR_MODE
+    return clamp(accumulated, half3(0.HF), half3(1.HF));
+#else
     half3 clamped = clamp(accumulated, half3(0.HF), half3(1.HF - EPS));
     return SafeColour(MaxHalf(InverseTonemap(clamped) * half3(inv_exposure)));
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -853,7 +865,7 @@ void StorePrevUpscaledColor(int32_t2 iPxPos, half3 colour)
 #if defined(NSS_BIND_UAV_HISTORY_UPSCALED_COLOR)
     imageStore(rw_prev_upscaled_color, iPxPos, half4(to_write, 1.0));
 #else
-    rw_prev_upscaled_color = half4(to_write, 1.0);
+    rw_prev_upscaled_color    = half4(to_write, 1.0);
 #endif
 }
 #endif
@@ -881,7 +893,7 @@ void Postprocess(int32_t2 output_pixel)
         return;
     }
 
-    half   exposure = half(Exposure().x);
+    half   exposure = Exposure();
     half   reset    = half(Reset());
     float2 uv       = (float2(output_px) + float2(0.5)) * InvOutputDims();
 
@@ -913,16 +925,21 @@ void Postprocess(int32_t2 output_pixel)
 
     //-------------------------------------------------------------------------
     // 5) Tonemapped accumulation
+    // HDR uses Karis here; LDR input should have already been tonemapped
     //-------------------------------------------------------------------------
+    half learnt_masked_alpha = alpha * center_sample.a * reset;
+#if NSS_LDR_MODE
+    half4 accumulated4 = mix(clamp(rectified, half4(0.HF), half4(1.HF)), clamp(center_sample, half4(0.HF), half4(1.HF)), half4(learnt_masked_alpha));
+#else
     half4 rectified_tm4       = Tonemap4(MaxHalf(rectified * half4(exposure)));
-    half  learnt_masked_alpha = alpha * center_sample.a * reset;
     half4 colour_to_accum_tm4 = Tonemap4(MaxHalf(center_sample * half4(exposure)));
     half4 accumulated4        = mix(rectified_tm4, colour_to_accum_tm4, half4(learnt_masked_alpha));
+#endif
 
     //-------------------------------------------------------------------------
     // 6) Convert back to linear and write outputs
     //-------------------------------------------------------------------------
-    half3 out_linear = ClampToInvertibleRange(accumulated4.rgb, half(Exposure().y));
+    half3 out_linear = ClampToInvertibleRange(accumulated4.rgb, InvExposure());
     WriteColourOut(output_px, out_linear);
 
 #if MANAGE_HISTORY && (defined(NSS_BIND_UAV_HISTORY_UPSCALED_COLOR) || defined(NSS_BIND_RENDER_TARGET_HISTORY_UPSCALED_COLOR))

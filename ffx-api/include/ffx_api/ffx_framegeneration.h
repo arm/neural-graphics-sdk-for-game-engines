@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -41,22 +43,27 @@ enum FfxApiCreateContextFramegenerationFlags
     FFX_API_FG_CONTEXT_FLAG_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS =
         (1 << 0),  ///< A bit indicating if the motion vectors are rendered at display resolution.
     FFX_API_FG_CONTEXT_FLAG_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION =
-        (1 << 1),                                              ///< A bit indicating that the motion vectors have the jittering pattern applied to them.
+        (1 << 1),                                              ///< Cancel sample-position jitter in backward motion; leave disabled for unjittered vectors.
     FFX_API_FG_CONTEXT_FLAG_ENABLE_DEPTH_INVERTED = (1 << 2),  ///< A bit indicating that the input depth buffer data provided is inverted [1..0].
     FFX_API_FG_CONTEXT_FLAG_ENABLE_DEPTH_INFINITE = (1 << 3),  ///< A bit indicating that the input depth buffer data provided is using an infinite far plane.
     FFX_API_FG_CONTEXT_FLAG_ENABLE_HIGH_DYNAMIC_RANGE =
         (1 << 4),  ///< A bit indicating if the input color data provided to all inputs is using a high-dynamic range.
-    FFX_API_FG_CONTEXT_FLAG_WARP_FRAGMENT        = (1 << 5),  ///< A bit indicating that warp stages (MV TP1 + flow TM1) should run as fragment jobs
-    FFX_API_FG_CONTEXT_FLAG_FILL_HOLES_FRAGMENT  = (1 << 6),  ///< A bit indicating that fill holes stages (TP1 + TM1) should run as fragment jobs
-    FFX_API_FG_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT = (1 << 7),  ///< A bit indicating that the pre-process stage should run as fragment job when supported
-    FFX_API_FG_CONTEXT_FLAG_POSTPROCESS_FRAGMENT = (1 << 8),  ///< A bit indicating that the postprocess stage should run as fragment job when supported
-    FFX_API_FG_CONTEXT_FLAG_DEBUG_VIEW_FRAGMENT  = (1 << 9),  ///< A bit indicating that the debug view stage should run as fragment job when supported
-    FFX_API_FG_CONTEXT_FLAG_ALL_STAGES_FRAGMENT  = FFX_API_FG_CONTEXT_FLAG_WARP_FRAGMENT | FFX_API_FG_CONTEXT_FLAG_FILL_HOLES_FRAGMENT |
-                                                  FFX_API_FG_CONTEXT_FLAG_PRE_PROCESS_FRAGMENT | FFX_API_FG_CONTEXT_FLAG_POSTPROCESS_FRAGMENT |
-                                                  FFX_API_FG_CONTEXT_FLAG_DEBUG_VIEW_FRAGMENT,  ///< All stages run as fragment jobs when supported
-    FFX_API_FG_CONTEXT_FLAG_ALL_STAGES_COMPUTE = 0,                                             ///< All stages run as compute jobs (no fragment bits set)
-    FFX_API_FG_CONTEXT_FLAG_MV_HINTS_FRAGMENT  = (1 << 11),  ///< A bit indicating that motion vector hints will be generated in a fragment shader
-
+    FFX_API_FG_CONTEXT_FLAG_WARP_COMPUTE =
+        (1 << 5),  ///< A bit indicating that warp stages (MV TP1 + flow TM1) should run as compute jobs. When unset, fragment jobs are used.
+    FFX_API_FG_CONTEXT_FLAG_FILL_HOLES_COMPUTE =
+        (1 << 6),  ///< A bit indicating that fill holes stages (TP1 + TM1) should run as compute jobs. When unset, fragment jobs are used.
+    FFX_API_FG_CONTEXT_FLAG_PRE_PROCESS_COMPUTE =
+        (1 << 7),  ///< A bit indicating that the pre-process stage should run as a compute job. When unset, the fragment job is used.
+    FFX_API_FG_CONTEXT_FLAG_POSTPROCESS_COMPUTE =
+        (1 << 8),  ///< A bit indicating that the postprocess stage should run as a compute job. When unset, the fragment job is used.
+    FFX_API_FG_CONTEXT_FLAG_DEBUG_VIEW_COMPUTE =
+        (1 << 9),  ///< A bit indicating that the debug view stage should run as a compute job. When unset, the fragment job is used.
+    FFX_API_FG_CONTEXT_FLAG_ALL_STAGES_COMPUTE = FFX_API_FG_CONTEXT_FLAG_WARP_COMPUTE | FFX_API_FG_CONTEXT_FLAG_FILL_HOLES_COMPUTE |
+                                                 FFX_API_FG_CONTEXT_FLAG_PRE_PROCESS_COMPUTE | FFX_API_FG_CONTEXT_FLAG_POSTPROCESS_COMPUTE |
+                                                 FFX_API_FG_CONTEXT_FLAG_DEBUG_VIEW_COMPUTE,  ///< All selectable stages run as compute jobs.
+    FFX_API_FG_CONTEXT_FLAG_MV_HINTS_COMPUTE =
+        (1 << 11),  ///< A bit indicating that motion vector hints should be generated in a compute shader. When unset, the fragment shader is used.
+    FFX_API_FG_CONTEXT_FLAG_ENABLE_MV_HINTS       = (1 << 19),  ///< A bit indicating that optical flow motion vector hints are enabled
     FFX_API_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_DEPTH = (1 << 17),  ///< A bit indicating that the SDK manages the previous depth internally.
     FFX_API_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_COLOR = (1 << 18),  ///< A bit indicating that the SDK manages the previous color internally.
 };
@@ -68,7 +75,8 @@ enum FfxApiDispatchFramegenerationFlags
         (1 << 0),  ///< A bit indicating that the generated output resource will contain debug views with relevant information.
     FFX_API_FG_DISPATCH_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY =
         (1 << 1),  ///< A bit indicating that the context should only run frame interpolation and not modify the swapchain.
-    FFX_API_FG_DISPATCH_FLAG_DUMP_GENERATED_FRAME = (1 << 2),  ///< A bit indicating that the generated frame will be dumped to disk.
+    FFX_API_FG_DISPATCH_FLAG_DUMP_GENERATED_FRAME  = (1 << 2),  ///< A bit indicating that the generated frame will be dumped to disk.
+    FFX_API_FG_DISPATCH_FLAG_ENABLE_DEBUG_CHECKING = (1 << 3),  ///< Enables verbose per-frame NFRU diagnostics. Required validation remains active when unset.
 };
 
 /// @ingroup ffxFrameGeneration
@@ -78,12 +86,15 @@ enum FfxApiDispatchFramegenerationFlags
 struct ffxApiCreateContextDescFrameGeneration
 {
     ffxCreateContextDescHeader header;
-    uint32_t                   flags;                  ///< A combination of zero or more values from FfxApiCreateContextFramegenerationFlags.
-    struct FfxApiDimensions2D  displaySize;            ///< The resolution at which both rendered and generated frames will be displayed.
-    struct FfxApiDimensions2D  renderSize;             ///< The maximum rendering resolution.
-    FfxApiFloat32x4x4          initialViewProjection;  ///< The initial view-projection matrix used to initialize internal state.
-    uint32_t                   backBufferFormat;       ///< The surface format for the backbuffer. One of the values from FfxApiSurfaceFormat.
-    ffxApiMessage              fpMessage;              ///< A pointer to a function that can receive messages from the runtime. May be null.
+    uint32_t                   flags;  ///< A combination of zero or more values from FfxApiCreateContextFramegenerationFlags.
+    struct FfxApiDimensions2D
+                              displaySize;  ///< The resolution at which both rendered and generated frames will be displayed; dimensions must fit the signed 32-bit shader range.
+    struct FfxApiDimensions2D renderSize;     ///< The maximum rendering resolution; dimensions must fit the signed 32-bit shader range.
+    FfxApiFloat32x4x4 initialViewProjection;  ///< Initial unjittered ViewProjection matrix in column-major storage for column-vector math and Vulkan NDC.
+    uint32_t          backBufferFormat;       ///< The surface format for the backbuffer. One of the values from FfxApiSurfaceFormat.
+    ffxApiMessage     fpMessage;              ///< A pointer to a function that can receive messages from the runtime. May be null.
+    struct FfxApiDimensions2D
+        mvDepthSize;  ///< Shared input depth/motion-vector resolution. {0, 0} defaults to renderSize. Dimensions must fit the signed 32-bit shader range and have the same aspect ratio as renderSize. Recreate the context when this changes.
 };
 
 /// @ingroup ffxFrameGeneration
@@ -151,14 +162,14 @@ struct ffxApiDispatchDescFrameGenerationPrepare
 {
     ffxDispatchDescHeader header;
     uint64_t
-                               frameID;  ///< Identifier used to select internal resources when async support is enabled. Must increment by exactly one (1) for each frame. Any non-exactly-one difference will reset the frame generation logic.
-    void*                      commandList;        ///< A command list to record frame generation commands into.
-    struct FfxApiFloatCoords2D jitterOffset;       ///< The subpixel jitter offset applied to the camera.
-    struct FfxApiFloatCoords2D motionVectorScale;  ///< The scale factor to apply to motion vectors.
-    float
-        mvSimilarityThreshold;  ///< Motion-vector similarity threshold (epsilon) used by dynamic-mask classification. <= 0 falls back to the legacy default (0.3).
-    float
-        mvSimilarityNoiseThreshold;  ///< Motion-vector noise threshold (tau) used by dynamic-mask classification. <= 0 falls back to the legacy default (1.0).
+                               frameID;  ///< Identifier used to select internal resources when async support is enabled. Must increment by exactly one (1) for each frame. Any non-exactly-one difference will reset the frame generation logic. Only one prepared frame may be pending per context; dispatch it before preparing another frame.
+    void*                      commandList;   ///< A command list to record frame generation commands into.
+    struct FfxApiFloatCoords2D jitterOffset;  ///< Sample-position offset in renderSize pixels, matching the upscaler for this frameID; not raster displacement.
+    struct FfxApiFloatCoords2D
+          motionVectorScale;  ///< Converts stored motion to mvDepthSize pixel offsets (displaySize pixels when the display-resolution motion-vector flag is set).
+    float mvSimilarityThreshold;  ///< Motion-vector similarity threshold (epsilon) used by dynamic-mask classification. <= 0 falls back to the default (0.25).
+    float mvSimilarityNoiseThreshold;     ///< Motion-vector noise threshold (tau) used by dynamic-mask classification. <= 0 falls back to the default (0.125).
+    float mvSimilarityRelativeThreshold;  ///< Relative motion-vector threshold; <= 0 uses 0.002, while NaN and infinities are rejected.
 
     float                 frameTimeDelta;           ///< Time elapsed in milliseconds since the last frame.
     float                 cameraNear;               ///< The distance to the near plane of the camera.
@@ -168,11 +179,11 @@ struct ffxApiDispatchDescFrameGenerationPrepare
     struct FfxApiResource depth;                    ///< The depth buffer data
     struct FfxApiResource motionVectors;            ///< The motion vector data
     struct FfxApiResource
-        depthTm1;  ///< The depth buffer data from the previous frame. Required when FFX_API_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_DEPTH is not set; ignored otherwise.
+        depthTm1;  ///< The depth buffer data from the previous frame. Required when FFX_API_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_DEPTH is not set and the SDK is not downsampling all inputs; ignored otherwise.
     struct FfxApiResource
         colorTm1;  ///< The rendered output from the previous frame. Required when FFX_API_FG_CONTEXT_FLAG_MANAGE_PREVIOUS_COLOR is not set; ignored otherwise.
 
-    FfxApiFloat32x4x4 viewProjection;  ///< This frame's ViewProjection matrix (column major)
+    FfxApiFloat32x4x4 viewProjection;  ///< This frame's unjittered ViewProjection matrix in column-major storage for column-vector math and Vulkan NDC.
 };
 
 /// @ingroup ffxFrameGeneration
@@ -188,16 +199,26 @@ struct ffxApiConfigureDescFrameGenerationKeyValue
 };
 
 /// @ingroup ffxFrameGeneration
-#define FFX_API_QUERY_DESC_TYPE_FG_GETPIPELINESTAGEINFO 0x00020007u  ///< header type for <c><i>ffxApiQueryDescFgGetPipelineStageInfo</i></c>.
+#define FFX_API_QUERY_DESC_TYPE_FG_GPU_MEMORY_USAGE 0x00020008u
+
 /// @ingroup ffxFrameGeneration
-struct ffxApiQueryDescFgGetPipelineStageInfo
+struct ffxApiQueryDescFrameGenerationGetGPUMemoryUsage
 {
-    ffxQueryDescHeader header;
-    bool*              pOutWarpUsesFragment;  ///< A pointer to a <c>bool</c> which will be set to true if warp stages run as fragment jobs. May be null.
-    bool* pOutFillHolesUsesFragment;          ///< A pointer to a <c>bool</c> which will be set to true if fill holes stages run as fragment jobs. May be null.
-    bool* pOutPreProcessUsesFragment;   ///< A pointer to a <c>bool</c> which will be set to true if the pre-process stage runs as a fragment job. May be null.
-    bool* pOutPostprocessUsesFragment;  ///< A pointer to a <c>bool</c> which will be set to true if the postprocess stage runs as a fragment job. May be null.
-    bool* pOutDebugViewUsesFragment;    ///< A pointer to a <c>bool</c> which will be set to true if the debug view stage runs as a fragment job. May be null.
+    ffxQueryDescHeader              header;
+    struct FfxApiEffectMemoryUsage* gpuMemoryUsageFrameGeneration;
+};
+
+/// @ingroup ffxFrameGeneration
+#define FFX_API_QUERY_DESC_TYPE_FG_CPU_MEMORY_USAGE 0x00020009u
+
+/// Queries current and peak CPU heap memory owned by a Frame Generation context.
+/// Returns <c>FFX_API_RETURN_ERROR_UNKNOWN_DESCTYPE</c> when the SDK is built
+/// with <c>FFX_ENABLE_CPU_HEAP_TRACKING=OFF</c>.
+/// @ingroup ffxFrameGeneration
+struct ffxApiQueryDescFrameGenerationGetCPUMemoryUsage
+{
+    ffxQueryDescHeader                 header;
+    struct FfxApiEffectCpuMemoryUsage* cpuMemoryUsageFrameGeneration;
 };
 
 #if defined(__cplusplus)

@@ -113,6 +113,7 @@ if (FFX_NSS OR FFX_ALL)
 	list(APPEND PUBLIC_SHADERS ${FFX_NSS_PUBLIC_SHADERS})
 endif()
 
+
 if (FFX_OF OR FFX_ALL)
 	set(ARM_OF_PRIVATE_SOURCE
 		"${FFX_SRC_BACKENDS_PATH}/shared/blob_accessors/ffx_opticalflow_shaderblobs.h"
@@ -146,6 +147,8 @@ endif()
 # Link against SPIRV-Tools built from source
 target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE SPIRV-Tools-opt)
 target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE SPIRV-Tools)
+target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE ffx_logging)
+target_link_libraries(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE ffx_tinyexr)
 
 # Include SPIRV-Tools headers
 target_include_directories(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE
@@ -223,6 +226,7 @@ if (FFX_FI OR FFX_ALL)
 	target_compile_definitions(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE FFX_FI)
 	include (CMakeShadersArmFrameinterpolation.txt)
 endif()
+
 
 if (FFX_OF OR FFX_ALL)
 	target_compile_definitions(ffx_backend_vk_${FFX_PLATFORM_NAME} PRIVATE FFX_OF)

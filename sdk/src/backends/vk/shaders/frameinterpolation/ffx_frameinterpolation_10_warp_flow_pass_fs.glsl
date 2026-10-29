@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 #version 460
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_16bit_storage : require
@@ -22,8 +24,6 @@
 // Output: RT bindings + UAV bindings
 //-----------------------------------------------------------------------------
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_UAV_WARP_MOTION_QDATA_TP1       4
-#define FFX_ARM_FRAMEINTERPOLATION_BIND_UAV_HOLES_TP1                   5
-#define FFX_ARM_FRAMEINTERPOLATION_BIND_UAV_HOLES_TM1                   6
 #if FFX_ARM_FRAMEINTERPOLATION_OPTION_MANAGE_PREVIOUS_DEPTH
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_RENDER_TARGET_DEPTH_TM1_NEXT    0
 #define FFX_ARM_FRAMEINTERPOLATION_BIND_RENDER_TARGET_DYNAMIC_MASK_TP1  1

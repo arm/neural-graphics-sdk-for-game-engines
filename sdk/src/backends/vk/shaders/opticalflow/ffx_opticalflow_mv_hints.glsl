@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #version 450
 #extension GL_EXT_shader_8bit_storage : require
@@ -21,6 +23,8 @@ layout(set = 0, binding = 0, std140) uniform Uniforms {
     FfxInt32x2     _DepthDims;         // 8 B
     FfxFloat32x2   _InvDepthDims;      // 8 B
     FfxInt32x2     _ColorDims;         // 8 B
+    FfxInt32x2     _MvDepthDims;       // 8 B
+    FfxFloat32x2   _InvMvDepthDims;    // 8 B
 }ubo;
 
 layout(set = 0, binding = 1)        uniform texture2D r_depth_tm1; // 540p | R32_FLOAT 32bpp
@@ -53,49 +57,35 @@ void ComputeMVHints(FfxInt32x2 output_pixel)
 {
     if (any(greaterThanEqual(output_pixel, ubo._OutputDims))) return;
 
-    // Map from OF resolution to depth resolution using dynamic scale
-    FfxInt32x2 depth_scale = ubo._DepthDims / ubo._OutputDims;
-    FfxInt32x2 depth_pixel = output_pixel * depth_scale;
-    FfxInt32x2 depthDims = ubo._DepthDims;
+    // Match pass 10's representative motion/depth pixel for each flow-lane hint.
+    FfxInt32x2 mv_depth_pixel =
+        (output_pixel * ubo._MvDepthDims + ubo._MvDepthDims / 2) / ubo._OutputDims;
+    FfxFloat32x2 uv = (FfxFloat32x2(mv_depth_pixel) + 0.5f) * ubo._InvMvDepthDims;
+    FfxInt32x2 depthDims  = ubo._DepthDims;
+    FfxInt32x2 depth_pixel =
+        clamp(FfxInt32x2(floor(uv * FfxFloat32x2(depthDims))), FfxInt32x2(0), depthDims - FfxInt32x2(1));
 
     const FfxInt32 iSampleCount = 9;
     FfxFloat32 depth_offset[iSampleCount];
 
-    const FfxInt32x2 offsets[9] = FfxInt32x2[9](
-        FfxInt32x2(+0, +0),
-        FfxInt32x2(+1, +0),
-        FfxInt32x2(+0, +1),
-        FfxInt32x2(+0, -1),
-        FfxInt32x2(-1, +0),
-        FfxInt32x2(-1, +1),
-        FfxInt32x2(+1, +1),
-        FfxInt32x2(-1, -1),
-        FfxInt32x2(+1, -1)
-    );
+    FfxFloat32x2 depth_uv  = (FfxFloat32x2(depth_pixel) + 0.5f) * ubo._InvDepthDims;
+    FfxFloat32x4 gather_tl = textureGather(sampler2D(r_depth_tm1, s_PointClamp), depth_uv - ubo._InvDepthDims, 0);
+    FfxFloat32x4 gather_br = textureGather(sampler2D(r_depth_tm1, s_PointClamp), depth_uv, 0);
 
-    // Helper: clamp offset via integer coords
-    #define FETCH_CLAMPED(i) \
-        depth_offset[i] = texelFetch( \
-            r_depth_tm1, \
-            clamp(depth_pixel + offsets[i], FfxInt32x2(0), depthDims - FfxInt32x2(1)), \
-            0 \
-        ).r
-
-    FETCH_CLAMPED(0);
-    FETCH_CLAMPED(1);
-    FETCH_CLAMPED(2);
-    FETCH_CLAMPED(3);
-    FETCH_CLAMPED(4);
-    FETCH_CLAMPED(5);
-    FETCH_CLAMPED(6);
-    FETCH_CLAMPED(7);
-    FETCH_CLAMPED(8);
-
-    #undef FETCH_CLAMPED
+    depth_offset[0] = gather_tl.y;
+    depth_offset[1] = gather_br.z;
+    depth_offset[2] = gather_br.x;
+    depth_offset[3] = gather_tl.z;
+    depth_offset[4] = gather_tl.x;
+    depth_offset[5] = texelFetch(
+        r_depth_tm1, clamp(depth_pixel + FfxInt32x2(-1, +1), FfxInt32x2(0), depthDims - FfxInt32x2(1)), 0).r;
+    depth_offset[6] = gather_br.y;
+    depth_offset[7] = gather_tl.w;
+    depth_offset[8] = texelFetch(
+        r_depth_tm1, clamp(depth_pixel + FfxInt32x2(+1, -1), FfxInt32x2(0), depthDims - FfxInt32x2(1)), 0).r;
 
     // Find closest depth among 9-tap neighbors
-    FfxInt32 iTapIdx = 0;
-    FfxFloat32 nearest_depth = depth_offset[iTapIdx];
+    FfxFloat32 nearest_depth = depth_offset[0];
     #pragma unroll
     for (FfxInt32 iSampleIndex = 1; iSampleIndex < iSampleCount; ++iSampleIndex) {
         FfxFloat32 tap = depth_offset[iSampleIndex];
@@ -104,14 +94,11 @@ void ComputeMVHints(FfxInt32x2 output_pixel)
 #else
         if (tap < nearest_depth) {
 #endif
-            iTapIdx = iSampleIndex;
             nearest_depth = tap;
         }
     }
 
-    FfxFloat32x2 uv = (FfxFloat32x2(depth_pixel.xy + offsets[iTapIdx]) + 0.5f) * ubo._InvDepthDims;
-
-    FFX_MIN16_F2 motion = CalculateCameraMotion(clamp(uv, 0.0f, 1.0f), depth_offset[iTapIdx], ubo._MotionMatM1P1);
+    FFX_MIN16_F2 motion = CalculateCameraMotion(clamp(uv, 0.0f, 1.0f), nearest_depth, ubo._MotionMatM1P1);
 
     // Convert from UV space to display pixel space according to DDK convention [From Optical Flow 3.2]
     motion *= FFX_MIN16_F2(ubo._ColorDims);

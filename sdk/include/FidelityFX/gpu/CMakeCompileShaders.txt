@@ -46,15 +46,9 @@ function(compile_data_graphs
 	message(STATUS "DATA_GRAPH_FILES=${DATA_GRAPH_FILES}")
 	message(STATUS "PERMUTATION_OUTPUTS=${PERMUTATION_OUTPUTS}")
 
-	# Compute a single header base for outputs: prefer binary-relative when
-	# the OUTPUT_PATH is inside the build tree so Makefile targets and depfiles
-	# use the same relative form.
-	file(RELATIVE_PATH _dg_path_rel ${CMAKE_BINARY_DIR} ${OUTPUT_PATH})
-	if(OUTPUT_PATH MATCHES "^${CMAKE_BINARY_DIR}")
-		set(_OUTPUT_PATH_FOR_HEADERS "${_dg_path_rel}")
-	else()
-		set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
-	endif()
+	# Use absolute outputs so multi-config generators execute the compiler in the
+	# same directory that the generated project records for the output.
+	set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
 
 	foreach(PASS_DATA_GRAPH ${DATA_GRAPH_FILES})
 		get_filename_component(PASS_DATA_GRAPH_FILENAME ${PASS_DATA_GRAPH} NAME_WE)
@@ -126,15 +120,10 @@ function(compile_shaders_with_depfile
 		list(APPEND COMPILE_INCLUDE_ARGS "-I${INCLUDE_SPACE}${INC}")
 	endforeach(INC)
 
-	# Compute a single header base for shader outputs; prefer binary-relative
-	# when the OUTPUT_PATH is inside the build tree so generated Makefile
-	# targets and depfiles use the same form.
-	file(RELATIVE_PATH _out_path_rel ${CMAKE_BINARY_DIR} ${OUTPUT_PATH})
-	if(OUTPUT_PATH MATCHES "^${CMAKE_BINARY_DIR}")
-		set(_OUTPUT_PATH_FOR_HEADERS "${_out_path_rel}")
-	else()
-		set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
-	endif()
+	# Use absolute paths for generated headers. The custom commands are created
+	# from component subdirectories, so relative outputs resolve there instead
+	# of next to the compiler's output directory.
+	set(_OUTPUT_PATH_FOR_HEADERS "${OUTPUT_PATH}")
 
 	foreach(PASS_SHADER ${SHADER_FILES})
 		get_filename_component(PASS_SHADER_FILENAME ${PASS_SHADER} NAME_WE)
@@ -145,6 +134,11 @@ function(compile_shaders_with_depfile
 
 		# combine base and permutation args
 		set(SC_ARGS ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})
+		if(USE_DEPFILE)
+			set(_DEPFILE_ARGS DEPFILE ${WAVE32_PERMUTATION_HEADER}.d)
+		else()
+			set(_DEPFILE_ARGS)
+		endif()
 
 		# Wave32
 		add_custom_command(
@@ -152,41 +146,56 @@ function(compile_shaders_with_depfile
 			COMMAND ${EXECUTABLE} ${SC_ARGS} -name=${PASS_SHADER_FILENAME} -DFFX_HALF=0 ${HLSL_WAVE32_ARGS} ${COMPILE_INCLUDE_ARGS} -output=${OUTPUT_PATH} ${PASS_SHADER}
 			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 			DEPENDS ${PASS_SHADER}
-			DEPFILE ${WAVE32_PERMUTATION_HEADER}.d
+			${_DEPFILE_ARGS}
 		)
 		list(APPEND _PERMUTATION_OUTPUTS ${WAVE32_PERMUTATION_HEADER})
 
 		# Wave32 16-bit
+		if(USE_DEPFILE)
+			set(_DEPFILE_ARGS DEPFILE ${WAVE32_16BIT_PERMUTATION_HEADER}.d)
+		else()
+			set(_DEPFILE_ARGS)
+		endif()
 		add_custom_command(
 			OUTPUT ${WAVE32_16BIT_PERMUTATION_HEADER}
 			COMMAND ${EXECUTABLE} ${SC_ARGS} -name=${PASS_SHADER_FILENAME}_16bit -DFFX_HALF=1 ${HLSL_16BIT_ARGS} ${HLSL_WAVE32_ARGS} ${COMPILE_INCLUDE_ARGS} -output=${OUTPUT_PATH} ${PASS_SHADER}
 			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 			DEPENDS ${PASS_SHADER}
-			DEPFILE ${WAVE32_16BIT_PERMUTATION_HEADER}.d
+			${_DEPFILE_ARGS}
 		)
 		list(APPEND _PERMUTATION_OUTPUTS ${WAVE32_16BIT_PERMUTATION_HEADER})
 
 		if (SUPPORT_WAVE64)
 			set(WAVE64_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_wave64_permutations.h")
+			if(USE_DEPFILE)
+				set(_DEPFILE_ARGS DEPFILE ${WAVE64_PERMUTATION_HEADER}.d)
+			else()
+				set(_DEPFILE_ARGS)
+			endif()
 
 			add_custom_command(
 				OUTPUT ${WAVE64_PERMUTATION_HEADER}
 				COMMAND ${EXECUTABLE} ${SC_ARGS} -name=${PASS_SHADER_FILENAME}_wave64 -DFFX_HALF=0 ${HLSL_WAVE64_ARGS} ${COMPILE_INCLUDE_ARGS} -output=${OUTPUT_PATH} ${PASS_SHADER}
 				WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 				DEPENDS ${PASS_SHADER}
-				DEPFILE ${WAVE64_PERMUTATION_HEADER}.d
+				${_DEPFILE_ARGS}
 			)
 			list(APPEND _PERMUTATION_OUTPUTS ${WAVE64_PERMUTATION_HEADER})
 
 			# Wave64 16-bit
 			set(WAVE64_16BIT_PERMUTATION_HEADER "${_OUTPUT_PATH_FOR_HEADERS}/${PASS_SHADER_TARGET}_wave64_16bit_permutations.h")
+			if(USE_DEPFILE)
+				set(_DEPFILE_ARGS DEPFILE ${WAVE64_16BIT_PERMUTATION_HEADER}.d)
+			else()
+				set(_DEPFILE_ARGS)
+			endif()
 
 			add_custom_command(
 				OUTPUT ${WAVE64_16BIT_PERMUTATION_HEADER}
 				COMMAND ${EXECUTABLE} ${SC_ARGS} -name=${PASS_SHADER_FILENAME}_wave64_16bit -DFFX_HALF=1 ${HLSL_16BIT_ARGS} ${HLSL_WAVE64_ARGS} ${COMPILE_INCLUDE_ARGS} -output=${OUTPUT_PATH} ${PASS_SHADER}
 				WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 				DEPENDS ${PASS_SHADER}
-				DEPFILE ${WAVE64_16BIT_PERMUTATION_HEADER}.d
+				${_DEPFILE_ARGS}
 			)
 			list(APPEND _PERMUTATION_OUTPUTS ${WAVE64_16BIT_PERMUTATION_HEADER})
 		endif()

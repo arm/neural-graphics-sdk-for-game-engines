@@ -7,7 +7,7 @@ samples/third_party/glm	https://github.com/g-truc/glm	fce2abd01ce21063bd25ba67c9
 samples/third_party/hwcpipe	https://github.com/ARM-software/HWCPipe.git	e4cfb5557aaa9e95a32f8b3d2f0f3f3f781f48ea	2.3.0-6-ge4cfb55
 samples/third_party/imgui	https://github.com/ocornut/imgui	da29b776eed289db16a8527e5f16a0e1fa540251	v1.62-3385-gda29b776e
 samples/third_party/ktx	https://github.com/KhronosGroup/KTX-Software.git	a3603eda5c068cd91ab9729b3dddd81e5967ed88	v4.4.0-14-ga3603eda
-samples/third_party/spdlog	https://github.com/gabime/spdlog.git	6fa36017cfd5731d617e1a934f0e5ea9c4445b13	v1.2.1-2510-g6fa36017
+samples/third_party/spdlog	https://github.com/gabime/spdlog.git	6fa36017cfd5731d617e1a934f0e5ea9c4445b13	v1.15.3
 samples/third_party/stb	https://github.com/nothings/stb	2c2908f50515dcd939f24be261c3ccbcd277bb49	2c2908f
 samples/third_party/tinygltf	https://github.com/syoyo/tinygltf.git	37250b3470b517fd6823ee82d6e0495695bb7924	v2.8.1-161-g37250b3
 samples/third_party/tracy	https://github.com/wolfpld/tracy.git	37aff70dfa50cf6307b3fee6074d627dc2929143	v0.10

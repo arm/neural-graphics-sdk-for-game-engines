@@ -20,10 +20,17 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "ffx_provider.h"
+
+static constexpr const char* ffxLogComponentName()
+{
+    return "API provider";
+}
 
 #include "ffx_provider_external.h"
 #if defined(FFX_FI)
@@ -54,7 +61,6 @@ static constexpr ffxProvider* providers[] = {
     &ffxProvider_FrameGenerationSwapChain_DX12::Instance,
 #endif  // FFX_BACKEND_DX12
 #endif
-
 #if defined(FFX_NSS)
     &ffxProvider_Nss::Instance,
 #endif

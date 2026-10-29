@@ -18,8 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -390,6 +392,11 @@ typedef enum FfxResourceStates
     FFX_RESOURCE_STATE_DATA_GRAPH_WRITE  = (1 << 11),                     ///< Indicates a resource is in the state to be written by data graph
     // used by FrameInterpolationSwapchain
     FFX_RESOURCE_STATE_DEPTH_ATTACHEMENT = (1 << 12),  ///< Indicates a resource is in the state to be used as depth attachment
+    // Data graph access to plain (non-tensor) textures. Unlike FFX_RESOURCE_STATE_DATA_GRAPH_READ/WRITE, which target
+    // tensor-aliased images and therefore use VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM, these keep the ordinary
+    // shader-read / general image layouts that the data graph pipeline and descriptors actually declare for textures.
+    FFX_RESOURCE_STATE_DATA_GRAPH_TEXTURE_READ  = (1 << 13),  ///< Indicates a plain texture is in the state to be read by data graph
+    FFX_RESOURCE_STATE_DATA_GRAPH_TEXTURE_WRITE = (1 << 14),  ///< Indicates a plain texture is in the state to be written by data graph
 
 } FfxResourceStates;
 
@@ -611,6 +618,7 @@ typedef enum FfxMsgType
 {
     FFX_MESSAGE_TYPE_ERROR   = 0,
     FFX_MESSAGE_TYPE_WARNING = 1,
+    FFX_MESSAGE_TYPE_INFO    = 2,
     FFX_MESSAGE_TYPE_COUNT
 } FfxMsgType;
 
@@ -643,11 +651,9 @@ typedef enum FfxEffect
     FFX_EFFECT_OPTICALFLOW,         ///< FidelityFX Optical Flow, part of FidelityFX Super Resolution v3
     FFX_EFFECT_NSSPLACEHOLDER,
     FFX_EFFECT_NFRUPLACEHOLDER,
-    FFX_EFFECT_ASR,
     FFX_EFFECT_NSS,
     ARM_EFFECT_FRAMEINTERPOLATION,  ///< Arm Frame Interpolation
-    FFX_EFFECT_CT_OPTICALFLOW,      ///< Arm Optical Flow
-    ARM_EFFECT_OPTICALFLOW,         ///< Arm neural based Optical Flow
+    ARM_EFFECT_OPTICALFLOW = 24,    ///< Arm neural based Optical Flow
 
     FFX_EFFECT_SHAREDRESOURCES  = 127,  ///< FidelityFX Shared resources effect ID
     FFX_EFFECT_SHAREDAPIBACKEND = 128   ///< FidelityFX Shared backend context used with DLL API
@@ -756,10 +762,10 @@ typedef void* FfxDataGraphPipelineSession;
 /// @ingroup SDKTypes
 typedef struct FfxDeviceCapabilities
 {
-    FfxShaderModel maximumSupportedShaderModel;                 ///< The maximum shader model supported by the device.
-    uint32_t       waveLaneCountMin;                            ///< The minimum supported wavefront width.
-    uint32_t       waveLaneCountMax;                            ///< The maximum supported wavefront width.
-    bool           fp16Supported;                               ///< The device supports FP16 in hardware.
+    FfxShaderModel maximumSupportedShaderModel;  ///< The maximum shader model supported by the device.
+    uint32_t       waveLaneCountMin;             ///< The minimum supported wavefront width.
+    uint32_t       waveLaneCountMax;             ///< The maximum supported wavefront width.
+    bool           fp16Supported;  ///< The physical device supports FP16 in hardware; this does not indicate that optional features were enabled on VkDevice.
     bool           raytracingSupported;                         ///< The device supports ray tracing.
     bool           deviceCoherentMemorySupported;               ///< The device supports AMD coherent memory.
     bool           dedicatedAllocationSupported;                ///< The device supports dedicated allocations for resources.
@@ -773,6 +779,8 @@ typedef struct FfxDeviceCapabilities
     bool           dataGraphOFSupported;                        ///< The device supports data graph optical flow.
     bool           costSupported;                               ///< The device supports cost map generation in the data graph optical flow.
     bool           hintSupported;                               ///< The device supports hint flow vector map in the data graph optical flow.
+    bool           fragmentStoresAndAtomicsSupported;           ///< Physical support; enable the feature on VkDevice.
+    bool           r11g11b10StorageImageSupported;              ///< Physical format support; enable extended formats on VkDevice.
     uint32_t       supportedOutputGridSizes;                    ///< The supported output grid sizes bit mask for the data graph optical flow.
     uint32_t       supportedHintGridSizes;                      ///< The supported hint grid sizes bit mask for the data graph optical flow.
     uint32_t       dataGraphOFMinWidth;                         ///< The minimum width for data graph optical flow.
@@ -1604,6 +1612,10 @@ typedef struct FfxFrameGenerationDispatchDescription
 typedef struct FfxEffectMemoryUsage
 {
     uint64_t totalUsageInBytes;
+    uint64_t textureUsageInBytes;
+    uint64_t bufferUsageInBytes;
+    uint64_t tensorUsageInBytes;
+    uint64_t dataGraphUsageInBytes;
     uint64_t aliasableUsageInBytes;
 } FfxEffectMemoryUsage;
 

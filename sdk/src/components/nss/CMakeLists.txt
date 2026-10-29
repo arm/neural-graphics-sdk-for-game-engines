@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-# SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: MIT
 
 if (FFX_NSS OR FFX_ALL)
@@ -53,6 +53,7 @@ if (FFX_NSS OR FFX_ALL)
 
 	target_include_directories(ffx_nss_${FFX_PLATFORM_NAME} PUBLIC ${FFX_INCLUDE_PATH})
 	target_include_directories(ffx_nss_${FFX_PLATFORM_NAME} PUBLIC ${FFX_SHARED_PATH})
+	target_link_libraries(ffx_nss_${FFX_PLATFORM_NAME} PRIVATE ffx_logging)
 
 	set_source_files_properties(${SHADERS} PROPERTIES HEADER_FILE_ONLY TRUE)
 	set_target_properties(ffx_nss_${FFX_PLATFORM_NAME} PROPERTIES FOLDER Components)

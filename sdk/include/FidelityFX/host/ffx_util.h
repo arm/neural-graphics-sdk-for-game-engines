@@ -20,8 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #pragma once
 
@@ -74,12 +76,16 @@ inline int wcstombs_s(size_t* pRetval, char* dst, size_t dst_size, const wchar_t
 /// The value of Pi.
 ///
 /// @ingroup Utils
-const float FFX_PI = 3.141592653589793f;
+#ifndef FFX_PI
+#define FFX_PI 3.141592653589793f
+#endif
 
 /// An epsilon value for floating point numbers.
 ///
 /// @ingroup Utils
-const float FFX_EPSILON = 1e-06f;
+#ifndef FFX_EPSILON
+#define FFX_EPSILON 1e-06f
+#endif
 
 /// Helper macro to create the version number.
 ///

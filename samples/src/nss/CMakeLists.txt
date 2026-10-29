@@ -25,12 +25,18 @@ add_sample(
     AUTHOR "Arm"
     NAME "NSS"
     DESCRIPTION "Neural Super Sampling"
+    LIBS
+        sample_common
+    FILES
+        dataset_loader.h
+        dataset_loader.cpp
     SHADER_FILES_GLSL
         "temporal/jitter.vert"
         "temporal/velocity.frag"
         "postprocessing.vert"
         "display.frag"
+        "display_ldr.frag"
 )
 
 # SDK headers + libraries are provided transitively by the `framework` target.
-# See: samples/framework/CMakeLists.txt#L481-L540 (SDK include dirs + SDK linkage).
+# See: samples/framework/CMakeLists.txt#L485-L556 (SDK include dirs + SDK linkage).

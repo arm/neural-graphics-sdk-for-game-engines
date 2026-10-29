@@ -18,8 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
-// SPDX-License-Identifier: MIT
+/*
+ * SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+ * SPDX-License-Identifier: MIT
+ */
 
 #ifndef FFX_NSS_RESOURCES_H
 #define FFX_NSS_RESOURCES_H
@@ -51,7 +53,11 @@
 #define FFX_NSS_RESOURCE_IDENTIFIER_DEBUG_VIEWS          18
 #define FFX_NSS_RESOURCE_IDENTIFIER_DISOCCLUSION_MASK_LQ 19
 
-#define FFX_NSS_RESOURCE_IDENTIFIER_COUNT 20
+// User-provided 1x1 exposure texture sampled by the pre/post-process shaders when
+// FFX_NSS_CONTEXT_FLAG_EXPOSURE_TEXTURE is enabled.
+#define FFX_NSS_RESOURCE_IDENTIFIER_INPUT_EXPOSURE 20
+
+#define FFX_NSS_RESOURCE_IDENTIFIER_COUNT 21
 
 #define FFX_NSS_CONSTANTBUFFER_IDENTIFIER_NSS 0
 #define FFX_NSS_CONSTANTBUFFER_COUNT          1

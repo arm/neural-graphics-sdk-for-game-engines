@@ -78,6 +78,10 @@ foreach(ID ${PROJECT_ID_LIST})
     endif()
 endforeach()
 
+if(TARGET sample_common)
+    target_link_libraries(${PROJECT_NAME} PUBLIC sample_common)
+endif()
+
 if (IOS)
     target_link_libraries(${PROJECT_NAME} PRIVATE
             "-framework UIKit"
